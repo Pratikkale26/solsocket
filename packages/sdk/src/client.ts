@@ -238,7 +238,7 @@ export class SolSocket {
         .instruction(),
     );
     await this.sendBase(instructions);
-    await this.waitForEr(presence);
+    await this.waitForErPresence(presence);
     return new Room<T, P, M>(room, presence, this.roomContext(), codec, opts.messageCodec, opts.presenceCodec);
   }
 
@@ -285,6 +285,36 @@ export class SolSocket {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error("timed out waiting for presence undelegation during rejoin");
+  }
+
+  /**
+   * Like `waitForEr`, but for a presence slot: existence is not enough — after
+   * a rejoin with a rotated session key the ER can briefly serve a stale clone
+   * holding the old authority, and session-signed writes would be dropped.
+   * Wait until the clone carries THIS session's authority.
+   */
+  private async waitForErPresence(presence: PublicKey): Promise<void> {
+    // Re-delegation after an authority rotation can take the ER tens of
+    // seconds to pick up (observed ~30s on the local stack) — be patient,
+    // this only runs during join, never on the hot path.
+    const deadline = Date.now() + 3 * ER_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await this.er.requestAirdrop(presence, 1).catch(() => {});
+      const info = await this.er.getAccountInfo(presence, "processed");
+      if (info) {
+        try {
+          const current = decodePresence(this.program, info.data);
+          if (current.authority.equals(this.session.publicKey)) return;
+        } catch {
+          // clone not decodable yet — keep polling
+        }
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    throw new Error(
+      `timed out waiting for the ephemeral rollup to pick up the new session ` +
+        `authority on ${presence.toBase58()} — try again in a few seconds`,
+    );
   }
 
   /**

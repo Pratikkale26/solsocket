@@ -35,7 +35,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node scripts/fix-esm.mjs",
     "gen:idl": "node scripts/embed-idl.mjs",
     "prepublishOnly": "npm run build",
-    "test:local": "ts-mocha -p tsconfig.test.json -t 1000000 tests/e2e.ts"
+    "test:local": "ts-mocha --exit -p tsconfig.test.json -t 1000000 tests/e2e.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",

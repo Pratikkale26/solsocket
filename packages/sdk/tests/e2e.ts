@@ -221,6 +221,75 @@ describe("solsocket e2e: two clients, one room", () => {
     await lobbyA.closeToBase();
   });
 
+  it("reconnect after refresh, session kept: resumes with zero base-layer txs", async function () {
+    this.timeout(60_000);
+    // A browser refresh drops the SolSocket instance but localStorage keeps
+    // the session key: a new instance with the SAME wallet + session must
+    // resume the delegated presence slot without touching the base layer.
+    const bobSession = sockB.session;
+    const refreshed = SolSocket.connect({
+      wallet: bob,
+      cluster: "local",
+      session: bobSession,
+    });
+    const before = await refreshed.base.getBalance(bob.publicKey);
+    const t0 = Date.now();
+    const resumed = await refreshed.joinRoom<Cursor>(roomA.address);
+    console.log(`same-session rejoin in ${Date.now() - t0}ms`);
+    assert.equal(
+      await refreshed.base.getBalance(bob.publicKey),
+      before,
+      "resume must not send (or pay for) any base-layer transaction",
+    );
+
+    const seen: Cursor[] = [];
+    const unsub = roomA.onPresence(({ player, data }) => {
+      if (player.equals(bob.publicKey)) seen.push(data);
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    await resumed.broadcast({ x: 77, y: 77 });
+    for (let i = 0; i < 40 && seen.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    unsub();
+    assert.deepEqual(seen[0], { x: 77, y: 77 }, "resumed client can broadcast");
+    assert.deepEqual(
+      (await resumed.getState())?.state,
+      { x: 9, y: 9 },
+      "resumed client sees current room state",
+    );
+  });
+
+  it("reconnect after refresh, session lost: recovers by rotating the key", async function () {
+    this.timeout(120_000);
+    // localStorage cleared: new session key, but the presence slot is still
+    // delegated under the old one. joinRoom must recover (leave with the
+    // wallet on the ER, wait for undelegation, rejoin fresh).
+    const wiped = SolSocket.connect({
+      wallet: bob,
+      cluster: "local",
+      session: Keypair.generate(),
+    });
+    const t0 = Date.now();
+    const recovered = await wiped.joinRoom<Cursor>(roomA.address);
+    console.log(`lost-session recovery rejoin in ${Date.now() - t0}ms`);
+
+    const seen: Cursor[] = [];
+    const unsub = roomA.onPresence(({ player, data }) => {
+      if (player.equals(bob.publicKey)) seen.push(data);
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    await recovered.broadcast({ x: 88, y: 88 }, { confirm: true });
+    for (let i = 0; i < 40 && seen.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    unsub();
+    assert.deepEqual(seen[0], { x: 88, y: 88 }, "recovered client can broadcast");
+    // Later tests reuse roomB (old session): hand the slot back to it.
+    await recovered.leave();
+    roomB = await sockB.joinRoom<Cursor>(roomA.address);
+  });
+
   it("bob leaves; alice closes the room to the base layer", async function () {
     this.timeout(120_000);
     await roomB.leave();
