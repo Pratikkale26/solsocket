@@ -15,6 +15,7 @@ export function jsonCodec<T>(): Codec<T> {
   };
 }
 
+/** Pass-through codec for apps that manage their own bytes. */
 export const rawCodec: Codec<Uint8Array> = {
   encode: (v) => v,
   decode: (b) => b,

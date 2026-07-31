@@ -119,6 +119,28 @@ State, presence, and messages each take their own pluggable `Codec`
 (`Room<TState, TPresence, TMessage>`): JSON by default, `structCodec` for
 compact binary presence (a full avatar in ~20 bytes), `rawCodec` for bytes.
 
+## Trust model
+
+Be precise about what is and isn't enforced on-chain:
+
+- **The program enforces**: room membership (you can only write presence,
+  events, or shared state through a presence slot the program created for
+  you), session authority (only the session key registered at join can sign
+  as you — rejoining rotates it via a wallet-signed recovery), size caps on
+  every payload, and creator-only room closure.
+- **Clients self-report their own presence.** A position broadcast is
+  client-authored, exactly like every mainstream game-netcode SDK
+  (Socket.io, Colyseus, Photon) — solsocket makes movement *authenticated
+  and attributable* (every update is a signed transaction from a known
+  wallet), not *validated*. Game-rule enforcement (speed limits, collision)
+  belongs in your program's instructions; the engine is deliberately
+  game-agnostic.
+- **Delegation trust follows MagicBlock's ER model**: while delegated, the
+  regional ER validator sequences and executes writes; state commits back
+  to the base layer on `leave()` / `closeToBase()`. Session keys live in
+  localStorage and can only write realtime room data — they never hold or
+  move funds; your wallet signs only the base-layer create/join/close.
+
 ## Status & roadmap
 
 Built for [MagicBlock Solana Blitz v7](https://build.magicblock.app)
