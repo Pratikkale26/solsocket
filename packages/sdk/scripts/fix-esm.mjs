@@ -27,9 +27,19 @@ for (const file of readdirSync(esm, { recursive: true })) {
       /\.(js|json|mjs|cjs)$/.test(p) ? m : `${kw}${q}${p}.js${q}`,
     )
     .replace(cjsImport, (m, names, q, mod) => {
-      const local = `__cjs${n++}`;
+      // Namespace + default-unwrap works everywhere: under a bundler (or a
+      // real ESM build like web3.js's browser bundle) the namespace carries
+      // the named exports; under native Node a CJS dep carries them on
+      // `.default` (= module.exports), including names the lexer missed.
+      const ns = `__cjs${n}ns`;
+      const local = `__cjs${n}`;
+      n += 1;
       const destructured = names.replace(/\s+as\s+/g, ": ").trim();
-      return `import ${local} from ${q}${mod}${q};\nconst { ${destructured} } = ${local};`;
+      return (
+        `import * as ${ns} from ${q}${mod}${q};\n` +
+        `const ${local} = ${ns}.default ?? ${ns};\n` +
+        `const { ${destructured} } = ${local};`
+      );
     });
   writeFileSync(path, fixed);
 }
