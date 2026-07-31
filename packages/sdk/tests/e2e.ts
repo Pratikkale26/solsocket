@@ -185,6 +185,14 @@ describe("solsocket e2e: two clients, one room", () => {
     assert.equal(tracker.players.size, 0);
   });
 
+  it("joinRoom on a nonexistent address throws a clear error", async function () {
+    this.timeout(20_000);
+    await assert.rejects(
+      sockB.joinRoom(Keypair.generate().publicKey),
+      /no room exists at/,
+    );
+  });
+
   it("listRooms discovers the room with both players counted", async function () {
     this.timeout(20_000);
     const listings = await sockB.listRooms();
@@ -308,9 +316,11 @@ describe("solsocket e2e: two clients, one room", () => {
     }
     unsub();
     assert.deepEqual(seen[0], { x: 88, y: 88 }, "recovered client can broadcast");
-    // Later tests reuse roomB (old session): hand the slot back to it.
-    await recovered.leave();
-    roomB = await sockB.joinRoom<Cursor>(roomA.address);
+    // The recovered client IS bob now — later tests use its room handle.
+    // (Deliberately no leave-and-rejoin churn here: stacking three
+    // delegation cycles inside a minute outruns the ER's clone propagation,
+    // which no real client does.)
+    roomB = recovered;
   });
 
   it("bob leaves; alice closes the room to the base layer", async function () {

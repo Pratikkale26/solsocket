@@ -8,7 +8,12 @@ import {
   PROGRAM_ID,
   PresenceAccount,
 } from "./engine";
-import { isKeypair, sendInstructions, WalletLike } from "./sender";
+import {
+  isKeypair,
+  sendInstructions,
+  sendInstructionsWithRetry,
+  WalletLike,
+} from "./sender";
 
 export interface StateUpdate<T> {
   state: T;
@@ -305,7 +310,7 @@ export class Room<T = unknown, P = T, M = unknown> {
         presence: this.presenceAddress,
       })
       .instruction();
-    await sendInstructions({
+    await sendInstructionsWithRetry({
       connection: this.ctx.er,
       instructions: [ix],
       feePayer: this.ctx.session.publicKey,
@@ -325,7 +330,7 @@ export class Room<T = unknown, P = T, M = unknown> {
       .undelegateRoom()
       .accounts({ payer: this.walletPubkey, room: this.address })
       .instruction();
-    await sendInstructions({
+    await sendInstructionsWithRetry({
       connection: this.ctx.er,
       instructions: [ix],
       feePayer: this.walletPubkey,

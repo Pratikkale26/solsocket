@@ -14,7 +14,12 @@ import {
   roomPda,
 } from "./engine";
 import { Room } from "./room";
-import { isKeypair, sendInstructions, WalletLike } from "./sender";
+import {
+  isKeypair,
+  sendInstructions,
+  sendInstructionsWithRetry,
+  WalletLike,
+} from "./sender";
 import { loadOrCreateSession } from "./session";
 
 export interface ConnectOptions {
@@ -259,6 +264,14 @@ export class SolSocket {
     const room = new PublicKey(roomAddress);
     const player = this.walletPubkey;
     const presence = presencePda(room, player);
+
+    if ((await this.base.getAccountInfo(room)) === null) {
+      throw new Error(
+        `no room exists at ${room.toBase58()} on this cluster ` +
+          `(base: ${this.cluster.baseRpc}) — check the address, and that you ` +
+          `connected with the same cluster the room was created on`,
+      );
+    }
     const validatorAccounts = [
       { pubkey: this.cluster.validator, isSigner: false, isWritable: false },
     ];
@@ -313,14 +326,29 @@ export class SolSocket {
   }
 
   private async sendBase(instructions: import("@solana/web3.js").TransactionInstruction[]) {
-    await sendInstructions({
-      connection: this.base,
-      instructions,
-      feePayer: this.walletPubkey,
-      signers: isKeypair(this.wallet) ? [this.wallet] : [],
-      wallet: isKeypair(this.wallet) ? undefined : this.wallet,
-      commitment: "confirmed",
-    });
+    try {
+      await sendInstructions({
+        connection: this.base,
+        instructions,
+        feePayer: this.walletPubkey,
+        signers: isKeypair(this.wallet) ? [this.wallet] : [],
+        wallet: isKeypair(this.wallet) ? undefined : this.wallet,
+        commitment: "confirmed",
+      });
+    } catch (err) {
+      // The most common first-run failure by far is an unfunded wallet, and
+      // the raw RPC error for it is impenetrable — diagnose it explicitly.
+      const lamports = await this.base.getBalance(this.walletPubkey).catch(() => null);
+      if (lamports !== null && lamports < 3_000_000) {
+        throw new Error(
+          `wallet ${this.walletPubkey.toBase58()} holds ${lamports / 1e9} SOL ` +
+            `on ${this.cluster.baseRpc} — creating/joining a room needs ` +
+            `~0.01 SOL for rent and fees. Fund it and retry. ` +
+            `(original error: ${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
+      throw err;
+    }
   }
 
   /** Undelegate a presence slot whose session key we no longer hold. */
@@ -329,13 +357,17 @@ export class SolSocket {
       .leaveRoom()
       .accounts({ payer: this.walletPubkey, presence })
       .instruction();
-    await sendInstructions({
+    await sendInstructionsWithRetry({
       connection: this.er,
       instructions: [ix],
       feePayer: this.walletPubkey,
       signers: isKeypair(this.wallet) ? [this.wallet] : [],
       wallet: isKeypair(this.wallet) ? undefined : this.wallet,
       commitment: "processed",
+      // Recovery races the ER's clone propagation by construction (the slot
+      // was just delegated under a key we no longer hold) — wait it out.
+      attempts: 12,
+      delayMs: 5_000,
     });
     // Undelegation settles on the base layer asynchronously.
     const deadline = Date.now() + ER_READY_TIMEOUT_MS;
@@ -361,7 +393,10 @@ export class SolSocket {
     while (Date.now() < deadline) {
       await this.er.requestAirdrop(presence, 1).catch(() => {});
       const info = await this.er.getAccountInfo(presence, "processed");
-      if (info) {
+      // Owner AND authority must both be current: a lagging ER can serve a
+      // raw base-layer copy (owner = delegation program, data already fresh)
+      // before it recognizes the delegation — writes would fail with 3007.
+      if (info && info.owner.equals(PROGRAM_ID)) {
         try {
           const current = decodePresence(this.program, info.data);
           if (current.authority.equals(this.session.publicKey)) return;
@@ -390,7 +425,9 @@ export class SolSocket {
       await new Promise((r) => setTimeout(r, 300));
     }
     throw new Error(
-      `timed out waiting for ${account.toBase58()} to appear on the ephemeral rollup`,
+      `timed out waiting for ${account.toBase58()} to appear on the ephemeral ` +
+        `rollup at ${this.cluster.erRpc} — if the room was created on a ` +
+        `different region or cluster, connect with that same one`,
     );
   }
 }

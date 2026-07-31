@@ -51,6 +51,28 @@ async function recentBlockhash(connection: Connection, commitment: Commitment) {
   return entry;
 }
 
+/**
+ * Commit/undelegate flows can transiently fail while the ER catches up on a
+ * fresh (re)delegation — the clone briefly shows the wrong owner. Retry
+ * on-chain failures with spacing; rethrow anything else immediately.
+ */
+export async function sendInstructionsWithRetry(
+  opts: SendOptions & { attempts?: number; delayMs?: number },
+): Promise<string> {
+  const { attempts = 6, delayMs = 5_000, ...send } = opts;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await sendInstructions(send);
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes("failed on-chain")) throw err;
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 export async function sendInstructions(opts: SendOptions): Promise<string> {
   const {
     connection,
@@ -76,10 +98,15 @@ export async function sendInstructions(opts: SendOptions): Promise<string> {
     skipPreflight: true,
   });
   if (!fireAndForget) {
-    await connection.confirmTransaction(
+    const conf = await connection.confirmTransaction(
       { signature, blockhash, lastValidBlockHeight },
       commitment,
     );
+    if (conf.value.err) {
+      throw new Error(
+        `transaction ${signature} failed on-chain: ${JSON.stringify(conf.value.err)}`,
+      );
+    }
   }
   return signature;
 }

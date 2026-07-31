@@ -28,6 +28,15 @@
 
 ### Fixed
 
+- Confirmed sends now surface on-chain failure instead of resolving
+  silently (`confirmTransaction`'s error value was ignored).
+- `leave()`, `closeToBase()`, and session recovery retry through the ER's
+  clone-propagation window (a freshly (re)delegated account can transiently
+  fail commit/undelegate instructions).
+- Clear, actionable errors for the common first-run failures: unfunded
+  wallet (with the exact address, balance, and amount needed), joining a
+  nonexistent room (with a cluster hint), and ER-timeout on a
+  cluster/region mismatch.
 - Lost-session rejoin: the ER can serve a stale presence clone holding the
   old session authority for tens of seconds after re-delegation, silently
   dropping the recovered player's writes — `joinRoom` now waits until the
