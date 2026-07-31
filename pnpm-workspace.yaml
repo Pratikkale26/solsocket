@@ -1,3 +1,7 @@
 packages:
   - packages/*
   - examples/*
+  - program
+allowBuilds:
+  bufferutil: true
+  utf-8-validate: true

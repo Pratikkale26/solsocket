@@ -1,0 +1,24 @@
+{
+  "name": "@solsocket/program",
+  "private": true,
+  "description": "solsocket-engine Anchor program + lifecycle tests",
+  "license": "MIT",
+  "scripts": {
+    "build": "anchor build",
+    "test:local": "ts-mocha -p ./tsconfig.json -t 1000000 tests/lifecycle.ts",
+    "test:devnet": "PROVIDER_ENDPOINT=https://api.devnet.solana.com WS_ENDPOINT=wss://api.devnet.solana.com EPHEMERAL_PROVIDER_ENDPOINT=https://devnet-as.magicblock.app EPHEMERAL_WS_ENDPOINT=wss://devnet-as.magicblock.app VALIDATOR=MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 ts-mocha -p ./tsconfig.json -t 1000000 tests/lifecycle.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.32.1",
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.16.2"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.0.0",
+    "mocha": "^11.2.2",
+    "ts-mocha": "^11.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
