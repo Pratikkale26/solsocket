@@ -1,9 +1,9 @@
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import type { Wallet } from "@coral-xyz/anchor/dist/cjs/provider";
 import { Connection, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
-import idl from "./idl/solsocket_engine.json";
+import { IDL } from "./idl";
 
-export const PROGRAM_ID = new PublicKey((idl as { address: string }).address);
+export const PROGRAM_ID = new PublicKey(IDL.address);
 export const DELEGATION_PROGRAM = new PublicKey(
   "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh",
 );
@@ -63,7 +63,7 @@ export function makeProgram(connection: Connection): Program {
   const provider = new AnchorProvider(connection, stubWallet, {
     commitment: connection.commitment ?? "confirmed",
   });
-  return new Program(idl as never, provider);
+  return new Program(IDL as never, provider);
 }
 
 export function decodeRoom(program: Program, data: Buffer): RoomAccount {

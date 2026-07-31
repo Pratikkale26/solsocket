@@ -1,6 +1,6 @@
 {
   "name": "solsocket",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Socket.io-style realtime multiplayer for Solana — rooms, broadcast, and state subscriptions on MagicBlock Ephemeral Rollups",
   "license": "MIT",
   "author": "Pratik Kale",
@@ -32,7 +32,9 @@
     "src"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && cp -r src/idl dist/esm/idl && cp -r src/idl dist/cjs/idl",
+    "build": "rm -rf dist && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node scripts/fix-esm.mjs",
+    "gen:idl": "node scripts/embed-idl.mjs",
+    "prepublishOnly": "npm run build",
     "test:local": "ts-mocha -p tsconfig.test.json -t 1000000 tests/e2e.ts"
   },
   "dependencies": {
