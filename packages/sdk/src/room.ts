@@ -1,6 +1,6 @@
 import { BN, Program } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { Codec } from "./codec";
+import { Codec, jsonCodec } from "./codec";
 import {
   decodePresence,
   decodeRoom,
@@ -22,6 +22,16 @@ export interface PresenceUpdate<T> {
   seq: number;
 }
 
+export interface RoomMessage<M> {
+  /** Wallet of the player who emitted the message. */
+  player: PublicKey;
+  /** Event name passed to `emit` ("chat", "emote", …). */
+  name: string;
+  data: M;
+  /** ER transaction signature carrying the message. */
+  signature: string;
+}
+
 export interface RoomContext {
   base: Connection;
   er: Connection;
@@ -40,17 +50,20 @@ export interface BroadcastOptions {
  * A live multiplayer room. All realtime traffic runs on the Ephemeral Rollup,
  * signed by the session key — no wallet popups, no fees, ~50ms writes.
  */
-export class Room<T = unknown> {
+export class Room<T = unknown, M = unknown> {
   private stateListeners = new Set<(u: StateUpdate<T>) => void>();
   private presenceListeners = new Set<(u: PresenceUpdate<T>) => void>();
+  private messageListeners = new Set<(m: RoomMessage<M>) => void>();
   private stateSubId: number | null = null;
   private presenceSubId: number | null = null;
+  private logsSubId: number | null = null;
 
   constructor(
     readonly address: PublicKey,
     readonly presenceAddress: PublicKey,
     private readonly ctx: RoomContext,
     private readonly codec: Codec<T>,
+    private readonly messageCodec: Codec<M> = jsonCodec<M>(),
   ) {}
 
   private get walletPubkey(): PublicKey {
@@ -117,7 +130,91 @@ export class Room<T = unknown> {
     return () => this.presenceListeners.delete(listener);
   }
 
-  /** Publish this player's presence blob — the socket.io `emit` of solsocket. */
+  /**
+   * Subscribe to ephemeral messages (see `emit`). Pass an event name to hear
+   * only that event, or just a listener to hear everything:
+   *
+   *   room.onMessage("chat", ({ player, data }) => addBubble(player, data));
+   *   room.onMessage(({ name, data }) => log(name, data));
+   */
+  onMessage(listener: (m: RoomMessage<M>) => void): () => void;
+  onMessage(name: string, listener: (m: RoomMessage<M>) => void): () => void;
+  onMessage(
+    nameOrListener: string | ((m: RoomMessage<M>) => void),
+    maybeListener?: (m: RoomMessage<M>) => void,
+  ): () => void {
+    const listener =
+      typeof nameOrListener === "string"
+        ? (m: RoomMessage<M>) => {
+            if (m.name === nameOrListener) maybeListener!(m);
+          }
+        : nameOrListener;
+    this.messageListeners.add(listener);
+    if (this.logsSubId === null) {
+      // Events live only in transaction logs; a mentions subscription on the
+      // room address delivers them at ER slot time, same as account writes.
+      this.logsSubId = this.ctx.er.onLogs(
+        this.address,
+        (logs) => {
+          if (logs.err) return;
+          for (const line of logs.logs) {
+            const prefix = "Program data: ";
+            if (!line.startsWith(prefix)) continue;
+            let event;
+            try {
+              event = this.ctx.program.coder.events.decode(line.slice(prefix.length));
+            } catch {
+              continue;
+            }
+            if (!event || event.name !== "roomEvent") continue;
+            const raw = event.data as {
+              room: PublicKey;
+              player: PublicKey;
+              name: string;
+              data: Buffer;
+            };
+            if (!raw.room.equals(this.address)) continue;
+            const message = {
+              player: raw.player,
+              name: raw.name,
+              data: this.messageCodec.decode(Uint8Array.from(raw.data)),
+              signature: logs.signature,
+            };
+            for (const cb of this.messageListeners) cb(message);
+          }
+        },
+        "processed",
+      );
+    }
+    return () => this.messageListeners.delete(listener);
+  }
+
+  /**
+   * Fire an ephemeral message — like `broadcast`, but nothing is written to
+   * any account: the payload rides in the transaction logs (chat lines, hits,
+   * reactions — events, not state). Zero-fee, session-signed, ~50ms delivery.
+   */
+  async emit(name: string, data: M, opts: BroadcastOptions = {}): Promise<string> {
+    const ix = await this.ctx.program.methods
+      .emitEvent(name, Buffer.from(this.messageCodec.encode(data)))
+      .accounts({
+        room: this.address,
+        presence: this.presenceAddress,
+        signer: this.ctx.session.publicKey,
+      })
+      .instruction();
+    return sendInstructions({
+      connection: this.ctx.er,
+      instructions: [ix],
+      feePayer: this.ctx.session.publicKey,
+      signers: [this.ctx.session],
+      commitment: "processed",
+      fireAndForget: !opts.confirm,
+    });
+  }
+
+  /** Publish this player's presence blob (position, status — sticky state
+   *  others can read anytime; for one-shot events use `emit`). */
   async broadcast(data: T, opts: BroadcastOptions = {}): Promise<string> {
     const ix = await this.ctx.program.methods
       .setPresence(Buffer.from(this.codec.encode(data)))
@@ -179,8 +276,13 @@ export class Room<T = unknown> {
         .catch(() => {});
       this.presenceSubId = null;
     }
+    if (this.logsSubId !== null) {
+      await this.ctx.er.removeOnLogsListener(this.logsSubId).catch(() => {});
+      this.logsSubId = null;
+    }
     this.stateListeners.clear();
     this.presenceListeners.clear();
+    this.messageListeners.clear();
   }
 
   /**

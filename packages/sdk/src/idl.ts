@@ -531,6 +531,52 @@ export const IDL = {
       ]
     },
     {
+      "name": "emit_event",
+      "docs": [
+        "Fire an ephemeral message. The payload is emitted as an event in the",
+        "transaction logs and never written to any account — no rent, no state",
+        "growth, still onchain-ordered. Clients receive it via a logsSubscribe",
+        "on the room address. Membership is proven by the caller's presence",
+        "slot; signed by the session key."
+      ],
+      "discriminator": [
+        82,
+        133,
+        188,
+        136,
+        167,
+        139,
+        209,
+        52
+      ],
+      "accounts": [
+        {
+          "name": "room",
+          "docs": [
+            "contend. Listed in the transaction so `mentions` log filters on the",
+            "room address match."
+          ]
+        },
+        {
+          "name": "presence"
+        },
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "join_room",
       "docs": [
         "Join a room: creates (or re-initializes) the caller's presence slot and",
@@ -880,6 +926,21 @@ export const IDL = {
       ]
     }
   ],
+  "events": [
+    {
+      "name": "RoomEvent",
+      "discriminator": [
+        112,
+        70,
+        119,
+        238,
+        104,
+        126,
+        153,
+        227
+      ]
+    }
+  ],
   "errors": [
     {
       "code": 6000,
@@ -957,6 +1018,30 @@ export const IDL = {
           },
           {
             "name": "state",
+            "type": "bytes"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoomEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "room",
+            "type": "pubkey"
+          },
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "data",
             "type": "bytes"
           }
         ]

@@ -22,16 +22,20 @@ export interface ConnectOptions {
   session?: Keypair;
 }
 
-export interface CreateRoomOptions<T> {
+export interface CreateRoomOptions<T, M = unknown> {
   /** Unique per creator; random by default. */
   id?: number;
   maxPlayers?: number;
   initialState?: T;
   codec?: Codec<T>;
+  /** Codec for `emit`/`onMessage` payloads (default: JSON). */
+  messageCodec?: Codec<M>;
 }
 
-export interface JoinRoomOptions<T> {
+export interface JoinRoomOptions<T, M = unknown> {
   codec?: Codec<T>;
+  /** Codec for `emit`/`onMessage` payloads (default: JSON). */
+  messageCodec?: Codec<M>;
 }
 
 const ER_READY_TIMEOUT_MS = 15_000;
@@ -85,7 +89,9 @@ export class SolSocket {
    * base-layer transaction, one wallet signature. Resolves when the room is
    * live on the ER.
    */
-  async createRoom<T = unknown>(opts: CreateRoomOptions<T> = {}): Promise<Room<T>> {
+  async createRoom<T = unknown, M = unknown>(
+    opts: CreateRoomOptions<T, M> = {},
+  ): Promise<Room<T, M>> {
     const codec = opts.codec ?? jsonCodec<T>();
     const id = new BN(opts.id ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
     const creator = this.walletPubkey;
@@ -120,17 +126,17 @@ export class SolSocket {
     ];
     await this.sendBase(instructions);
     await this.waitForEr(room);
-    return new Room<T>(room, presence, this.roomContext(), codec);
+    return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
   }
 
   /**
    * Join an existing room: create + delegate this player's presence slot.
    * Handles rejoin (rotating a lost session key) transparently.
    */
-  async joinRoom<T = unknown>(
+  async joinRoom<T = unknown, M = unknown>(
     roomAddress: PublicKey | string,
-    opts: JoinRoomOptions<T> = {},
-  ): Promise<Room<T>> {
+    opts: JoinRoomOptions<T, M> = {},
+  ): Promise<Room<T, M>> {
     const codec = opts.codec ?? jsonCodec<T>();
     const room = new PublicKey(roomAddress);
     const player = this.walletPubkey;
@@ -146,7 +152,7 @@ export class SolSocket {
       // the wallet (allowed on-chain) and rejoining fresh.
       const current = decodePresence(this.program, info.data);
       if (current.authority.equals(this.session.publicKey)) {
-        return new Room<T>(room, presence, this.roomContext(), codec);
+        return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
       }
       await this.recoverPresence(presence);
     }
@@ -175,7 +181,7 @@ export class SolSocket {
     );
     await this.sendBase(instructions);
     await this.waitForEr(presence);
-    return new Room<T>(room, presence, this.roomContext(), codec);
+    return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
   }
 
   private roomContext() {

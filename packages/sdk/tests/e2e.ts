@@ -69,6 +69,48 @@ describe("solsocket e2e: two clients, one room", () => {
     console.log(`broadcast -> remote WS delivery in ${hit!.ms}ms`);
   });
 
+  it("bob hears alice's ephemeral message via emit/onMessage", async () => {
+    const received: { from: string; text: string; ms: number }[] = [];
+    let t0 = Date.now();
+    const unsub = roomB.onMessage("chat", ({ player, data }) => {
+      received.push({
+        from: player.toBase58(),
+        text: (data as { text: string }).text,
+        ms: Date.now() - t0,
+      });
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    t0 = Date.now();
+    await roomA.emit("chat", { text: "gm from alice" });
+    for (let i = 0; i < 40 && received.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    unsub();
+    assert.ok(received.length > 0, "message should arrive over the log subscription");
+    const hit = received.find((r) => r.from === alice.publicKey.toBase58());
+    assert.ok(hit, "message should be attributed to alice's wallet");
+    assert.equal(hit!.text, "gm from alice");
+    console.log(`emit -> remote WS delivery in ${hit!.ms}ms`);
+  });
+
+  it("named onMessage filters out other events", async () => {
+    const chatHits: string[] = [];
+    const allHits: string[] = [];
+    const unsubChat = roomB.onMessage("chat", ({ name }) => chatHits.push(name));
+    const unsubAll = roomB.onMessage(({ name }) => allHits.push(name));
+    await new Promise((r) => setTimeout(r, 500));
+
+    await roomA.emit("emote", { kind: "wave" });
+    for (let i = 0; i < 40 && allHits.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    unsubChat();
+    unsubAll();
+    assert.ok(allHits.includes("emote"), "unfiltered listener hears the emote");
+    assert.equal(chatHits.length, 0, "'chat' listener must not hear an 'emote'");
+  });
+
   it("alice sees bob's shared-state write", async () => {
     const received: { data: Cursor; seq: number }[] = [];
     const unsub = roomA.onStateChange(({ state, seq }) => {
