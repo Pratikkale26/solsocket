@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd ../.. && pnpm install",
+  "buildCommand": "cd ../.. && pnpm --filter solsocket build && pnpm --filter @solsocket/gather-lite build",
+  "outputDirectory": "dist",
+  "framework": "vite"
+}
