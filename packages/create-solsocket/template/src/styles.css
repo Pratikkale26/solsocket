@@ -1,0 +1,140 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: #0b0e14;
+  color: #e6e6e6;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid #1e2430;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 1.1rem;
+}
+
+.tag {
+  color: #7aa2f7;
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.live {
+  background: #9ece6a;
+}
+
+.dot.wait {
+  background: #e0af68;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.latency {
+  color: #9ece6a;
+}
+
+button {
+  background: #1e2430;
+  color: #e6e6e6;
+  border: 1px solid #2c3446;
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #7aa2f7;
+}
+
+.panel {
+  margin: 2rem auto;
+  max-width: 34rem;
+  padding: 1.5rem;
+  border: 1px solid #1e2430;
+  border-radius: 10px;
+  line-height: 1.6;
+  font-size: 0.9rem;
+}
+
+.panel button {
+  margin: 0.75rem 0.5rem 0 0;
+}
+
+.panel code {
+  word-break: break-all;
+  color: #7aa2f7;
+}
+
+.error {
+  color: #f7768e;
+}
+
+.canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  cursor: crosshair;
+  background:
+    radial-gradient(circle at 20% 30%, #11162205 0, transparent 50%),
+    repeating-linear-gradient(0deg, transparent, transparent 39px, #12182422 40px),
+    repeating-linear-gradient(90deg, transparent, transparent 39px, #12182422 40px);
+}
+
+.cursor {
+  position: absolute;
+  transform: translate(-2px, -2px);
+  transition: left 60ms linear, top 60ms linear;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 0.65rem;
+}
+
+.hint {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #565f89;
+  pointer-events: none;
+  padding: 2rem;
+  text-align: center;
+}
