@@ -1,0 +1,41 @@
+{
+  "name": "solsocket",
+  "version": "0.1.0",
+  "description": "Socket.io-style realtime multiplayer for Solana — rooms, broadcast, and state subscriptions on MagicBlock Ephemeral Rollups",
+  "license": "MIT",
+  "author": "Pratik Kale",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pratikkale26/solsocket.git"
+  },
+  "keywords": [
+    "solana",
+    "magicblock",
+    "ephemeral-rollups",
+    "realtime",
+    "multiplayer",
+    "websocket",
+    "rooms"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test:local": "ts-mocha -p tsconfig.test.json -t 1000000 tests/e2e.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.32.1",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.0.0",
+    "mocha": "^11.2.2",
+    "ts-mocha": "^11.1.0",
+    "typescript": "^5.8.3"
+  }
+}
