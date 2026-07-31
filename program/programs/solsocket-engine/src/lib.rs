@@ -1,4 +1,7 @@
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
 declare_id!("CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh");
 
@@ -11,6 +14,7 @@ pub const MAX_ROOM_STATE: usize = 512;
 /// Capacity of each player's presence blob (e.g. a cursor is 8 bytes).
 pub const MAX_PRESENCE_DATA: usize = 64;
 
+#[ephemeral]
 #[program]
 pub mod solsocket_engine {
     use super::*;
@@ -69,6 +73,89 @@ pub mod solsocket_engine {
         let presence = &mut ctx.accounts.presence;
         presence.seq += 1;
         presence.data = data;
+        Ok(())
+    }
+
+    /// Delegate a room to an Ephemeral Rollup. Base layer. The target ER's
+    /// validator identity may be passed as the first remaining account;
+    /// omitted, the delegation program picks one.
+    pub fn delegate_room(ctx: Context<DelegateRoom>, creator: Pubkey, room_id: u64) -> Result<()> {
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &[ROOM_SEED, creator.as_ref(), &room_id.to_le_bytes()],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|acc| acc.key()),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Delegate a presence slot to the same ER as its room. Base layer.
+    pub fn delegate_presence(
+        ctx: Context<DelegatePresence>,
+        room: Pubkey,
+        player: Pubkey,
+    ) -> Result<()> {
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &[PRESENCE_SEED, room.as_ref(), player.as_ref()],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|acc| acc.key()),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Checkpoint the room's ER state to the base layer (stays delegated).
+    /// Any member may checkpoint; it only persists what the ER already holds.
+    pub fn commit_room(ctx: Context<CommitRoom>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit(&[ctx.accounts.room.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    /// Commit and undelegate the room back to the base layer. Creator only —
+    /// signed by the creator wallet (an occasional, popup-worthy action).
+    pub fn undelegate_room(ctx: Context<CommitRoom>) -> Result<()> {
+        require!(
+            ctx.accounts.room.creator == ctx.accounts.payer.key(),
+            SolsocketError::BadAuthority
+        );
+        ctx.accounts.room.exit(&crate::ID)?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.room.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    /// Leave: commit and undelegate the caller's presence slot. Signed by
+    /// either the session authority (popup-free) or the joining wallet.
+    pub fn leave_room(ctx: Context<LeavePresence>) -> Result<()> {
+        let presence = &ctx.accounts.presence;
+        let signer = ctx.accounts.payer.key();
+        require!(
+            signer == presence.authority || signer == presence.player,
+            SolsocketError::BadAuthority
+        );
+        ctx.accounts.presence.exit(&crate::ID)?;
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.presence.to_account_info()])
+        .build_and_invoke()?;
         Ok(())
     }
 
@@ -161,6 +248,42 @@ pub struct CloseRoom<'info> {
     pub room: Account<'info, Room>,
     #[account(mut)]
     pub creator: Signer<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateRoom<'info> {
+    pub payer: Signer<'info>,
+    /// CHECK: the room PDA to delegate; validated by seeds in delegate_pda.
+    #[account(mut, del)]
+    pub pda: UncheckedAccount<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegatePresence<'info> {
+    pub payer: Signer<'info>,
+    /// CHECK: the presence PDA to delegate; validated by seeds in delegate_pda.
+    #[account(mut, del)]
+    pub pda: UncheckedAccount<'info>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct CommitRoom<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub room: Account<'info, Room>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct LeavePresence<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut)]
+    pub presence: Account<'info, Presence>,
 }
 
 #[account]
