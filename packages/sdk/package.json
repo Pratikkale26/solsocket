@@ -1,6 +1,6 @@
 {
   "name": "solsocket",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Socket.io-style realtime multiplayer for Solana — rooms, broadcast, and state subscriptions on MagicBlock Ephemeral Rollups",
   "license": "MIT",
   "author": "Pratik Kale",

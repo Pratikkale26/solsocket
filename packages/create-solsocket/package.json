@@ -1,6 +1,6 @@
 {
   "name": "create-solsocket",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scaffold a realtime onchain multiplayer app on Solana (solsocket + MagicBlock Ephemeral Rollups)",
   "license": "MIT",
   "author": "Pratik Kale",
@@ -9,9 +9,19 @@
     "url": "https://github.com/Pratikkale26/solsocket.git",
     "directory": "packages/create-solsocket"
   },
-  "keywords": ["create", "solana", "solsocket", "magicblock", "realtime", "multiplayer"],
+  "keywords": [
+    "create",
+    "solana",
+    "solsocket",
+    "magicblock",
+    "realtime",
+    "multiplayer"
+  ],
   "bin": {
     "create-solsocket": "index.js"
   },
-  "files": ["index.js", "template"]
+  "files": [
+    "index.js",
+    "template"
+  ]
 }
