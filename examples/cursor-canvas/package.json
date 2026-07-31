@@ -1,0 +1,26 @@
+{
+  "name": "@solsocket/cursor-canvas",
+  "private": true,
+  "description": "Shared-cursor canvas demo — realtime multiplayer on Solana in ~30 lines of solsocket",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "buffer": "^6.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "solsocket": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.0.0"
+  }
+}
