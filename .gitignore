@@ -1,0 +1,21 @@
+# deps / build
+node_modules/
+dist/
+target/
+.anchor/
+test-ledger/
+
+# env & keys
+.env
+.env.*
+!.env.example
+*-keypair.json
+
+# local reference clone (not part of this project)
+magicblock-engine-examples/
+
+# tooling
+.claude/
+.DS_Store
+*.log
+.vercel/
