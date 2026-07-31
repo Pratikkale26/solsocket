@@ -1,6 +1,20 @@
 import { Connection, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import assert from "node:assert/strict";
-import { LOCAL, SolSocket, structCodec, trackPresence } from "../src";
+import { DEVNET, LOCAL, SolSocket, resolveCluster, structCodec, trackPresence } from "../src";
+
+describe("resolveCluster regions", () => {
+  it("maps each devnet region to its ER host and validator identity", () => {
+    assert.deepEqual(resolveCluster("devnet"), DEVNET);
+    const eu = resolveCluster("devnet", "eu");
+    assert.equal(eu.erRpc, "https://devnet-eu.magicblock.app");
+    assert.equal(eu.validator.toBase58(), "MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e");
+    const us = resolveCluster("devnet", "us");
+    assert.equal(us.erRpc, "https://devnet-us.magicblock.app");
+    assert.equal(us.validator.toBase58(), "MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd");
+    assert.deepEqual(resolveCluster("devnet", "asia"), DEVNET);
+    assert.throws(() => resolveCluster(LOCAL, "eu"), /region.*only applies/);
+  });
+});
 
 type Cursor = { x: number; y: number };
 

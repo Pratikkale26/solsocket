@@ -2,7 +2,7 @@ import { BN, Program } from "@coral-xyz/anchor";
 import { sha256 } from "@noble/hashes/sha256";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { Codec, jsonCodec } from "./codec";
-import { ClusterConfig, ClusterName, resolveCluster } from "./connections";
+import { ClusterConfig, ClusterName, Region, resolveCluster } from "./connections";
 import {
   decodePresence,
   makeProgram,
@@ -19,6 +19,10 @@ export interface ConnectOptions {
   wallet: WalletLike | Keypair;
   /** "devnet" (default), "local", or explicit endpoints. */
   cluster?: ClusterName | ClusterConfig;
+  /** Devnet ER region — pick the one closest to your players ("asia" is the
+   *  default). A room lives on the region it was created on, so everyone
+   *  joining it must connect with the same region. */
+  region?: Region;
   /** Override the auto-managed session key. */
   session?: Keypair;
 }
@@ -76,7 +80,7 @@ export class SolSocket {
   private readonly program: Program;
 
   private constructor(opts: ConnectOptions) {
-    this.cluster = resolveCluster(opts.cluster ?? "devnet");
+    this.cluster = resolveCluster(opts.cluster ?? "devnet", opts.region);
     this.base = new Connection(this.cluster.baseRpc, {
       wsEndpoint: this.cluster.baseWs,
       commitment: "confirmed",

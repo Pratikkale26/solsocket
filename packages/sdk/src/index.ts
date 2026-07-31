@@ -13,7 +13,7 @@ export type {
   StateUpdate,
 } from "./room";
 export { DEVNET, LOCAL, resolveCluster } from "./connections";
-export type { ClusterConfig, ClusterName } from "./connections";
+export type { ClusterConfig, ClusterName, Region } from "./connections";
 export { jsonCodec, rawCodec, structCodec } from "./codec";
 export type { Codec, StructField } from "./codec";
 export { smoothPresence, trackPresence } from "./presence";

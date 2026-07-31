@@ -17,6 +17,11 @@ import { loadBurnerWallet, requestAirdrop } from "./wallet";
 const wallet = loadBurnerWallet();
 const params = new URLSearchParams(location.search);
 const cluster = params.get("cluster") === "local" ? ("local" as const) : ("devnet" as const);
+const REGIONS = ["asia", "eu", "us"] as const;
+const region =
+  cluster === "devnet"
+    ? REGIONS.find((r) => r === params.get("region"))
+    : undefined;
 
 type Msg = ChatMsg | EmoteMsg;
 type World = Room<WorldState, Avatar, Msg>;
@@ -35,13 +40,16 @@ const avatarCodec = structCodec<Avatar>([
 ]);
 
 async function goLive(): Promise<World> {
-  const sock = SolSocket.connect({ wallet, cluster });
+  const sock = SolSocket.connect({ wallet, cluster, region });
   const opts = { presenceCodec: avatarCodec, initialState: { door: false } };
   const shared = params.get("room");
   const room = shared
     ? await sock.joinRoom<WorldState, Avatar, Msg>(new PublicKey(shared), opts)
     : await sock.createRoom<WorldState, Avatar, Msg>(opts);
-  const suffix = cluster === "local" ? "&cluster=local" : "";
+  // The invite link must pin cluster AND region: a room lives on the ER it
+  // was delegated to, so friends have to connect to the same one.
+  const suffix =
+    (cluster === "local" ? "&cluster=local" : "") + (region ? `&region=${region}` : "");
   history.replaceState(null, "", `?room=${room.address.toBase58()}${suffix}`);
   return room;
 }

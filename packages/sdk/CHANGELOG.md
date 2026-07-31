@@ -21,6 +21,16 @@
 - **Per-channel codecs**: `Room<TState, TPresence, TMessage>` — state,
   presence, and messages can each use their own codec (e.g. JSON state +
   binary presence).
+- **Regions**: `connect({ region: "asia" | "eu" | "us" })` picks the devnet
+  ER closest to your players (validator identity pinned per region).
+
+### Fixed
+
+- Lost-session rejoin: the ER can serve a stale presence clone holding the
+  old session authority for tens of seconds after re-delegation, silently
+  dropping the recovered player's writes — `joinRoom` now waits until the
+  clone carries the new session key. Same-session refresh still resumes
+  instantly with zero base-layer transactions.
 
 ### Changed
 
