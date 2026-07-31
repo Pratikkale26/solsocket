@@ -46,6 +46,8 @@ importers:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@24.13.3)
 
+  packages/create-solsocket: {}
+
   packages/sdk:
     dependencies:
       '@coral-xyz/anchor':
