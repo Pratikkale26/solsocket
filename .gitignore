@@ -21,3 +21,6 @@ magicblock-engine-examples/
 .DS_Store
 *.log
 .vercel/
+
+# internal planning docs (not published)
+notes/
