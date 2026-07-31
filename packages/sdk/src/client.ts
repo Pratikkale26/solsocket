@@ -4,9 +4,12 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { Codec, jsonCodec } from "./codec";
 import { ClusterConfig, ClusterName, Region, resolveCluster } from "./connections";
 import {
+  accountFilter,
   decodePresence,
+  decodeRoom,
   makeProgram,
   presencePda,
+  PRESENCE_ROOM_OFFSET,
   PROGRAM_ID,
   roomPda,
 } from "./engine";
@@ -53,6 +56,19 @@ export interface JoinOrCreateOptions<T, P = T, M = unknown>
   /** Whose named room to join. Defaults to this wallet — pass the room
    *  owner's pubkey to join someone else's named room. */
   creator?: PublicKey;
+}
+
+/** A live room found by `listRooms`. */
+export interface RoomListing {
+  /** Pass to `joinRoom` to enter. */
+  address: PublicKey;
+  creator: PublicKey;
+  id: BN;
+  maxPlayers: number;
+  /** Players currently holding a presence slot (includes idle ones). */
+  players: number;
+  /** Total writes to the room state — a proxy for how active it has been. */
+  seq: number;
 }
 
 /** Deterministic room id for a name: first 8 bytes of sha256(name). */
@@ -110,6 +126,46 @@ export class SolSocket {
   /** Deterministic room address for a named room (see `joinOrCreate`). */
   roomAddressForName(creator: PublicKey, name: string): PublicKey {
     return roomPda(creator, nameToRoomId(name));
+  }
+
+  /**
+   * Discover rooms that are live on this cluster's ephemeral rollup, most
+   * populated first — the lobby browser. Anyone can join any listed room:
+   *
+   *   const [busiest] = await sock.listRooms();
+   *   const room = await sock.joinRoom(busiest.address);
+   */
+  async listRooms(): Promise<RoomListing[]> {
+    const [rooms, presences] = await Promise.all([
+      this.er.getProgramAccounts(PROGRAM_ID, {
+        commitment: "processed",
+        filters: [accountFilter("Room")],
+      }),
+      this.er.getProgramAccounts(PROGRAM_ID, {
+        commitment: "processed",
+        // Only the 32-byte `room` field — enough to count players per room.
+        dataSlice: { offset: PRESENCE_ROOM_OFFSET, length: 32 },
+        filters: [accountFilter("Presence")],
+      }),
+    ]);
+    const players = new Map<string, number>();
+    for (const { account } of presences) {
+      const room = new PublicKey(account.data).toBase58();
+      players.set(room, (players.get(room) ?? 0) + 1);
+    }
+    return rooms
+      .map(({ pubkey, account }) => {
+        const room = decodeRoom(this.program, account.data);
+        return {
+          address: pubkey,
+          creator: room.creator,
+          id: room.roomId,
+          maxPlayers: room.maxPlayers,
+          players: players.get(pubkey.toBase58()) ?? 0,
+          seq: room.seq.toNumber(),
+        };
+      })
+      .sort((a, b) => b.players - a.players || b.seq - a.seq);
   }
 
   /**

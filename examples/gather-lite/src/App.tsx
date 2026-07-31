@@ -1,6 +1,13 @@
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PresenceEntry, Room, SolSocket, smoothPresence, structCodec } from "solsocket";
+import {
+  PresenceEntry,
+  Room,
+  RoomListing,
+  SolSocket,
+  smoothPresence,
+  structCodec,
+} from "solsocket";
 import {
   Avatar,
   ChatMsg,
@@ -26,6 +33,9 @@ const region =
 type Msg = ChatMsg | EmoteMsg;
 type World = Room<WorldState, Avatar, Msg>;
 
+// Which room to enter: the invite link's, or one picked from the live list.
+let joinTarget = params.get("room");
+
 /* ──────────────────────────────────────────────────────────────────────────
  * The entire realtime integration. A multiplayer world on Solana:
  * binary presence for avatars, JSON events for chat/emotes, shared state
@@ -42,7 +52,7 @@ const avatarCodec = structCodec<Avatar>([
 async function goLive(): Promise<World> {
   const sock = SolSocket.connect({ wallet, cluster, region });
   const opts = { presenceCodec: avatarCodec, initialState: { door: false } };
-  const shared = params.get("room");
+  const shared = joinTarget;
   const room = shared
     ? await sock.joinRoom<WorldState, Avatar, Msg>(new PublicKey(shared), opts)
     : await sock.createRoom<WorldState, Avatar, Msg>(opts);
@@ -75,6 +85,7 @@ export default function App() {
   const [echo, setEcho] = useState<number | null>(null);
   const [chatDraft, setChatDraft] = useState("");
   const [showHint, setShowHint] = useState(true);
+  const [worlds, setWorlds] = useState<RoomListing[]>([]);
 
   const roomRef = useRef<World | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,6 +108,12 @@ export default function App() {
 
   useEffect(() => {
     void refreshBalance();
+    // Lobby browser: worlds already live on the ER, busiest first.
+    const sock = SolSocket.connect({ wallet, cluster, region });
+    sock
+      .listRooms()
+      .then((rooms) => setWorlds(rooms.filter((r) => r.players > 0).slice(0, 4)))
+      .catch(() => {});
   }, [refreshBalance]);
 
   const enter = async () => {
@@ -347,9 +364,26 @@ export default function App() {
               disabled={balance !== null && balance < 0.01}
               onClick={enter}
             >
-              enter the world
+              {joinTarget ? "join this world" : "create a new world"}
             </button>
           </div>
+          {worlds.length > 0 && !joinTarget && (
+            <div className="worlds">
+              <p>…or join a world that's already live on the rollup:</p>
+              {worlds.map((w) => (
+                <button
+                  key={w.address.toBase58()}
+                  disabled={balance !== null && balance < 0.01}
+                  onClick={() => {
+                    joinTarget = w.address.toBase58();
+                    void enter();
+                  }}
+                >
+                  {w.address.toBase58().slice(0, 8)}… · {w.players} inside
+                </button>
+              ))}
+            </div>
+          )}
           {error && <p className="error">{error}</p>}
         </div>
       )}

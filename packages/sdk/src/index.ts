@@ -4,6 +4,7 @@ export type {
   CreateRoomOptions,
   JoinOrCreateOptions,
   JoinRoomOptions,
+  RoomListing,
 } from "./client";
 export { Room } from "./room";
 export type {

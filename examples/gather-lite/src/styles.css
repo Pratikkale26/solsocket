@@ -134,6 +134,26 @@ button.primary:disabled {
   color: #f87171;
 }
 
+.worlds {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #2c2f3f;
+}
+
+.worlds p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #9aa0b4;
+}
+
+.worlds button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 6px;
+  font-family: ui-monospace, monospace;
+}
+
 .stage {
   margin-top: 12px;
   position: relative;

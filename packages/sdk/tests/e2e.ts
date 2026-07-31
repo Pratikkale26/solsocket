@@ -185,6 +185,15 @@ describe("solsocket e2e: two clients, one room", () => {
     assert.equal(tracker.players.size, 0);
   });
 
+  it("listRooms discovers the room with both players counted", async function () {
+    this.timeout(20_000);
+    const listings = await sockB.listRooms();
+    const mine = listings.find((r) => r.address.equals(roomA.address));
+    assert.ok(mine, "our room should be discoverable on the ER");
+    assert.equal(mine!.players, 2, "alice and bob both hold presence slots");
+    assert.ok(mine!.creator.equals(alice.publicKey));
+  });
+
   it("split codecs: JSON room state + binary struct presence", async function () {
     this.timeout(60_000);
     type Avatar = { x: number; y: number; facing: number };

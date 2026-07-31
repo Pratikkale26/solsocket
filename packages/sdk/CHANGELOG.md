@@ -23,6 +23,8 @@
   binary presence).
 - **Regions**: `connect({ region: "asia" | "eu" | "us" })` picks the devnet
   ER closest to your players (validator identity pinned per region).
+- **Discovery**: `sock.listRooms()` — every room live on the cluster's ER,
+  with player counts, most populated first. The lobby browser.
 
 ### Fixed
 

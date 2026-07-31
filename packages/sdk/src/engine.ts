@@ -1,4 +1,4 @@
-import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
+import { AnchorProvider, BN, Program, utils } from "@coral-xyz/anchor";
 import type { Wallet } from "@coral-xyz/anchor/dist/cjs/provider";
 import { Connection, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
 import { IDL } from "./idl";
@@ -28,6 +28,14 @@ export function presencePda(room: PublicKey, player: PublicKey): PublicKey {
 /** Byte offset of the `room` field inside a Presence account (after the
  *  8-byte Anchor discriminator) — used for programSubscribe memcmp filters. */
 export const PRESENCE_ROOM_OFFSET = 8;
+
+/** memcmp filter matching one account type by its Anchor discriminator. */
+export function accountFilter(name: "Room" | "Presence") {
+  const disc = IDL.accounts.find((a) => a.name === name)!.discriminator;
+  return {
+    memcmp: { offset: 0, bytes: utils.bytes.bs58.encode(Buffer.from(disc)) },
+  };
+}
 
 export interface RoomAccount {
   creator: PublicKey;
