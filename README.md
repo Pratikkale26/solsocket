@@ -37,7 +37,15 @@ already knows: **rooms, broadcast, subscribe**.
 Naive Anchor round-trip on an ER: **4–8 s** perceived latency (HTTP confirm
 polling). solsocket's `processed`-commitment websocket path: **~50 ms**. Measured
 in [`packages/sdk/tests/e2e.ts`](packages/sdk/tests/e2e.ts) — cross-client
-delivery in **54ms** on a local ER.
+presence delivery in **54ms** and event delivery in **8ms** on a local ER.
+
+The whole multiplayer integration in
+[`cursor-canvas`](examples/cursor-canvas) is **~15 lines**; the
+[`gather-lite`](examples/gather-lite) world — avatars, proximity chat, emotes,
+a shared door — is **~40**. The raw equivalent is two connections, two
+providers, hand-derived PDAs, delegate→ER→commit sequencing with validator
+identities as remaining accounts, session-key plumbing, and
+processed-commitment subscription wiring, before any game code.
 
 ## How it works
 
@@ -96,10 +104,11 @@ Solana CLI 3.x, Rust 1.89+.
 ## API sketch
 
 ```ts
-SolSocket.connect({ wallet, cluster: "devnet" | "local" | custom, session? })
+SolSocket.connect({ wallet, cluster, region?, session? })
 sock.joinOrCreate<T>("name", opts?)  // named room: same name → same room
 sock.createRoom<T>({ id?, maxPlayers?, initialState?, codec?, ... })  → Room
 sock.joinRoom<T>(address)            // handles rejoin + lost-session recovery
+sock.listRooms()                     // every live room on the ER, busiest first
 room.broadcast(data)         // write own presence slot (fire-and-forget)
 room.emit(name, data)        // ephemeral event in tx logs — no state write
 room.setState(data)          // write shared room state
@@ -144,10 +153,11 @@ Be precise about what is and isn't enforced on-chain:
 ## Status & roadmap
 
 Built for [MagicBlock Solana Blitz v7](https://build.magicblock.app)
-(theme: Collaboration). Working now: everything above, tested on the local
-MagicBlock stack and Solana devnet (measured: 8ms cross-client event delivery
-and 54ms presence delivery on a local ER). Next: room discovery (`listRooms`),
-multi-region ER selection (`region: "asia" | "eu" | "us"`), mainnet.
+(theme: Collaboration). Working now: everything above — including events,
+named rooms, discovery, and multi-region — covered by the program lifecycle
+suite plus a 16-test SDK e2e suite on the local MagicBlock stack, with the
+events path verified on devnet. Next: mainnet endpoints, docs site,
+program-side validation hooks for game rules.
 
 ## License
 
