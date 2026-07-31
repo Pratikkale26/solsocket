@@ -66,6 +66,7 @@ export default function App() {
   const [txCount, setTxCount] = useState(0);
   const [echo, setEcho] = useState<number | null>(null);
   const [chatDraft, setChatDraft] = useState("");
+  const [showHint, setShowHint] = useState(true);
 
   const roomRef = useRef<World | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -167,6 +168,7 @@ export default function App() {
         return;
       }
       if (typing()) return;
+      setShowHint(false);
       keys.add(e.key.toLowerCase());
       const emoteIdx = ["1", "2", "3", "4"].indexOf(e.key);
       if (emoteIdx >= 0) {
@@ -355,6 +357,27 @@ export default function App() {
 
       <div className="stage" style={{ display: phase === "live" ? "block" : "none" }}>
         <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
+        {phase === "live" && showHint && (
+          <div className="hint" onClick={() => setShowHint(false)}>
+            <b>how to play</b>
+            <div>
+              <kbd>W</kbd>
+              <kbd>A</kbd>
+              <kbd>S</kbd>
+              <kbd>D</kbd> walk
+            </div>
+            <div>
+              <kbd>Enter</kbd> chat — only players within 4 tiles hear you
+            </div>
+            <div>
+              <kbd>E</kbd> open the door (stand next to it)
+            </div>
+            <div>
+              <kbd>1</kbd>–<kbd>4</kbd> emote
+            </div>
+            <span className="hint-note">every action is an onchain tx · move to dismiss</span>
+          </div>
+        )}
         <form className="chatbar" onSubmit={sendChat}>
           <input
             ref={chatInputRef}
