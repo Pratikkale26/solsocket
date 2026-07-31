@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, web3 } from "@coral-xyz/anchor";
 import assert from "node:assert/strict";
-import { SolsocketEngine } from "../target/types/solsocket_engine";
+import type { SolsocketEngine } from "../target/types/solsocket_engine";
 import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 
 const ROOM_SEED = "room";

@@ -13,6 +13,11 @@ pub const PRESENCE_SEED: &[u8] = b"presence";
 pub const MAX_ROOM_STATE: usize = 512;
 /// Capacity of each player's presence blob (e.g. a cursor is 8 bytes).
 pub const MAX_PRESENCE_DATA: usize = 64;
+/// Capacity of an ephemeral event payload. Events live only in transaction
+/// logs (~1KB budget after base64 + the event header), never in accounts.
+pub const MAX_EVENT_DATA: usize = 512;
+/// Capacity of an event's name ("chat", "emote", …).
+pub const MAX_EVENT_NAME: usize = 32;
 
 #[ephemeral]
 #[program]
@@ -73,6 +78,23 @@ pub mod solsocket_engine {
         let presence = &mut ctx.accounts.presence;
         presence.seq += 1;
         presence.data = data;
+        Ok(())
+    }
+
+    /// Fire an ephemeral message. The payload is emitted as an event in the
+    /// transaction logs and never written to any account — no rent, no state
+    /// growth, still onchain-ordered. Clients receive it via a logsSubscribe
+    /// on the room address. Membership is proven by the caller's presence
+    /// slot; signed by the session key.
+    pub fn emit_event(ctx: Context<EmitEvent>, name: String, data: Vec<u8>) -> Result<()> {
+        require!(name.len() <= MAX_EVENT_NAME, SolsocketError::StateTooLarge);
+        require!(data.len() <= MAX_EVENT_DATA, SolsocketError::StateTooLarge);
+        emit!(RoomEvent {
+            room: ctx.accounts.room.key(),
+            player: ctx.accounts.presence.player,
+            name,
+            data,
+        });
         Ok(())
     }
 
@@ -227,6 +249,20 @@ pub struct SetPresence<'info> {
 }
 
 #[derive(Accounts)]
+pub struct EmitEvent<'info> {
+    /// CHECK: address-only reference; readonly so concurrent emitters never
+    /// contend. Listed in the transaction so `mentions` log filters on the
+    /// room address match.
+    pub room: UncheckedAccount<'info>,
+    #[account(
+        constraint = presence.room == room.key() @ SolsocketError::NotAMember,
+        constraint = presence.authority == signer.key() @ SolsocketError::BadAuthority
+    )]
+    pub presence: Account<'info, Presence>,
+    pub signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ClosePresence<'info> {
     #[account(
         mut,
@@ -307,6 +343,14 @@ pub struct Presence {
     pub seq: u64,
     pub bump: u8,
     #[max_len(MAX_PRESENCE_DATA)]
+    pub data: Vec<u8>,
+}
+
+#[event]
+pub struct RoomEvent {
+    pub room: Pubkey,
+    pub player: Pubkey,
+    pub name: String,
     pub data: Vec<u8>,
 }
 
