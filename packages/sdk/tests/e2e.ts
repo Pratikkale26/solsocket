@@ -127,6 +127,22 @@ describe("solsocket e2e: two clients, one room", () => {
     assert.deepEqual(received[received.length - 1].data, { x: 9, y: 9 });
   });
 
+  it("joinOrCreate: same name lands both clients in the same room", async function () {
+    this.timeout(60_000);
+    const name = `lobby-${Date.now()}`;
+    const lobbyA = await sockA.joinOrCreate<Cursor>(name);
+    const lobbyB = await sockB.joinOrCreate<Cursor>(name, {
+      creator: alice.publicKey,
+    });
+    assert.equal(lobbyA.address.toBase58(), lobbyB.address.toBase58());
+    assert.equal(
+      lobbyA.address.toBase58(),
+      sockB.roomAddressForName(alice.publicKey, name).toBase58(),
+    );
+    await lobbyB.leave();
+    await lobbyA.closeToBase();
+  });
+
   it("bob leaves; alice closes the room to the base layer", async function () {
     this.timeout(120_000);
     await roomB.leave();

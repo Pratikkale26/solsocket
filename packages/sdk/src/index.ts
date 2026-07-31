@@ -1,5 +1,10 @@
-export { SolSocket } from "./client";
-export type { ConnectOptions, CreateRoomOptions, JoinRoomOptions } from "./client";
+export { SolSocket, nameToRoomId } from "./client";
+export type {
+  ConnectOptions,
+  CreateRoomOptions,
+  JoinOrCreateOptions,
+  JoinRoomOptions,
+} from "./client";
 export { Room } from "./room";
 export type {
   BroadcastOptions,

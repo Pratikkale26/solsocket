@@ -1,4 +1,5 @@
 import { BN, Program } from "@coral-xyz/anchor";
+import { sha256 } from "@noble/hashes/sha256";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { Codec, jsonCodec } from "./codec";
 import { ClusterConfig, ClusterName, resolveCluster } from "./connections";
@@ -24,7 +25,7 @@ export interface ConnectOptions {
 
 export interface CreateRoomOptions<T, M = unknown> {
   /** Unique per creator; random by default. */
-  id?: number;
+  id?: number | BN;
   maxPlayers?: number;
   initialState?: T;
   codec?: Codec<T>;
@@ -36,6 +37,18 @@ export interface JoinRoomOptions<T, M = unknown> {
   codec?: Codec<T>;
   /** Codec for `emit`/`onMessage` payloads (default: JSON). */
   messageCodec?: Codec<M>;
+}
+
+export interface JoinOrCreateOptions<T, M = unknown> extends CreateRoomOptions<T, M> {
+  /** Whose named room to join. Defaults to this wallet — pass the room
+   *  owner's pubkey to join someone else's named room. */
+  creator?: PublicKey;
+}
+
+/** Deterministic room id for a name: first 8 bytes of sha256(name). */
+export function nameToRoomId(name: string): BN {
+  const digest = sha256(new TextEncoder().encode(name));
+  return new BN(Buffer.from(digest.subarray(0, 8)), "le");
 }
 
 const ER_READY_TIMEOUT_MS = 15_000;
@@ -80,8 +93,47 @@ export class SolSocket {
   }
 
   /** Deterministic room address from its creator and id. */
-  roomAddress(creator: PublicKey, id: number): PublicKey {
+  roomAddress(creator: PublicKey, id: number | BN): PublicKey {
     return roomPda(creator, new BN(id));
+  }
+
+  /** Deterministic room address for a named room (see `joinOrCreate`). */
+  roomAddressForName(creator: PublicKey, name: string): PublicKey {
+    return roomPda(creator, nameToRoomId(name));
+  }
+
+  /**
+   * Join a named room, creating it first if it doesn't exist — the Colyseus
+   * `joinOrCreate`. The name deterministically addresses the room, so every
+   * client calling `joinOrCreate("lobby")` with the same creator lands in the
+   * same room and nobody has to branch on create-vs-join:
+   *
+   *   const room = await sock.joinOrCreate("lobby", { creator: OWNER });
+   */
+  async joinOrCreate<T = unknown, M = unknown>(
+    name: string,
+    opts: JoinOrCreateOptions<T, M> = {},
+  ): Promise<Room<T, M>> {
+    const creator = opts.creator ?? this.walletPubkey;
+    const id = nameToRoomId(name);
+    const address = roomPda(creator, id);
+
+    const info = await this.base.getAccountInfo(address);
+    if (info) return this.joinRoom<T, M>(address, opts);
+    if (!creator.equals(this.walletPubkey)) {
+      throw new Error(
+        `room "${name}" does not exist yet for creator ${creator.toBase58()} — ` +
+          `its owner must create it first (joinOrCreate with their own wallet)`,
+      );
+    }
+    try {
+      return await this.createRoom<T, M>({ ...opts, id });
+    } catch (err) {
+      // Lost a create race: someone else's transaction landed first. Join it.
+      const nowExists = await this.base.getAccountInfo(address);
+      if (nowExists) return this.joinRoom<T, M>(address, opts);
+      throw err;
+    }
   }
 
   /**
