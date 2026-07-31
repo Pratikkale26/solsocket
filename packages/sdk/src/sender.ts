@@ -30,6 +30,27 @@ export interface SendOptions {
   fireAndForget?: boolean;
 }
 
+/**
+ * Blockhash cache, keyed per RPC endpoint. High-frequency broadcast() calls
+ * would otherwise pay a full RPC round trip per message. TTL stays well under
+ * blockhash validity even at the ER's 50ms slot time (150 slots ≈ 7.5s).
+ */
+const BLOCKHASH_TTL_MS = 2_000;
+const blockhashCache = new Map<
+  string,
+  { blockhash: string; lastValidBlockHeight: number; fetchedAt: number }
+>();
+
+async function recentBlockhash(connection: Connection, commitment: Commitment) {
+  const key = connection.rpcEndpoint;
+  const cached = blockhashCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < BLOCKHASH_TTL_MS) return cached;
+  const fresh = await connection.getLatestBlockhash(commitment);
+  const entry = { ...fresh, fetchedAt: Date.now() };
+  blockhashCache.set(key, entry);
+  return entry;
+}
+
 export async function sendInstructions(opts: SendOptions): Promise<string> {
   const {
     connection,
@@ -41,8 +62,10 @@ export async function sendInstructions(opts: SendOptions): Promise<string> {
     fireAndForget = false,
   } = opts;
 
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash(commitment);
+  const { blockhash, lastValidBlockHeight } = await recentBlockhash(
+    connection,
+    commitment,
+  );
   let tx = new Transaction({ blockhash, lastValidBlockHeight, feePayer });
   tx.add(...instructions);
 
