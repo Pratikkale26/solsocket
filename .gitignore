@@ -4,6 +4,8 @@ dist/
 target/
 .anchor/
 test-ledger/
+magicblock-test-storage/
+mb-stack.log
 
 # env & keys
 .env
