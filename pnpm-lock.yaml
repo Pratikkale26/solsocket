@@ -12,6 +12,31 @@ importers:
         specifier: ^3.5.3
         version: 3.9.6
 
+  packages/sdk:
+    dependencies:
+      '@coral-xyz/anchor':
+        specifier: 0.32.1
+        version: 0.32.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@solana/web3.js':
+        specifier: ^1.98.0
+        version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+    devDependencies:
+      '@types/mocha':
+        specifier: ^10.0.10
+        version: 10.0.10
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      mocha:
+        specifier: ^11.2.2
+        version: 11.7.6
+      ts-mocha:
+        specifier: ^11.1.0
+        version: 11.1.0(mocha@11.7.6)(ts-node@10.9.2(@types/node@24.13.3)(typescript@5.9.3))
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   program:
     dependencies:
       '@coral-xyz/anchor':
@@ -19,7 +44,7 @@ importers:
         version: 0.32.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@magicblock-labs/ephemeral-rollups-sdk':
         specifier: 0.16.2
-        version: 0.16.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+        version: 0.16.2
     devDependencies:
       '@types/bn.js':
         specifier: ^5.1.0
@@ -765,7 +790,7 @@ snapshots:
   '@coral-xyz/anchor@0.32.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)':
     dependencies:
       '@coral-xyz/anchor-errors': 0.31.1
-      '@coral-xyz/borsh': 0.31.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@coral-xyz/borsh': 0.31.1(@solana/web3.js@1.98.4(typescript@5.9.3))
       '@noble/hashes': 1.8.0
       '@solana/web3.js': 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
       bn.js: 5.2.5
@@ -783,7 +808,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@coral-xyz/borsh@0.31.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
+  '@coral-xyz/borsh@0.31.1(@solana/web3.js@1.98.4(typescript@5.9.3))':
     dependencies:
       '@solana/web3.js': 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
       bn.js: 5.2.5
@@ -811,7 +836,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@magicblock-labs/ephemeral-rollups-sdk@0.16.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@magicblock-labs/ephemeral-rollups-sdk@0.16.2':
     dependencies:
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
@@ -1179,7 +1204,7 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  isomorphic-ws@4.0.1(ws@7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6)):
+  isomorphic-ws@4.0.1(ws@7.5.13):
     dependencies:
       ws: 7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6)
 
@@ -1198,7 +1223,7 @@ snapshots:
       delay: 5.0.0
       es6-promisify: 5.0.0
       eyes: 0.1.8
-      isomorphic-ws: 4.0.1(ws@7.5.13(bufferutil@4.1.0)(utf-8-validate@6.0.6))
+      isomorphic-ws: 4.0.1(ws@7.5.13)
       json-stringify-safe: 5.0.1
       stream-json: 1.9.1
       uuid: 8.3.2
