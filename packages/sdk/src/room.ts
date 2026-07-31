@@ -50,21 +50,29 @@ export interface BroadcastOptions {
  * A live multiplayer room. All realtime traffic runs on the Ephemeral Rollup,
  * signed by the session key — no wallet popups, no fees, ~50ms writes.
  */
-export class Room<T = unknown, M = unknown> {
+export class Room<T = unknown, P = T, M = unknown> {
   private stateListeners = new Set<(u: StateUpdate<T>) => void>();
-  private presenceListeners = new Set<(u: PresenceUpdate<T>) => void>();
+  private presenceListeners = new Set<(u: PresenceUpdate<P>) => void>();
   private messageListeners = new Set<(m: RoomMessage<M>) => void>();
   private stateSubId: number | null = null;
   private presenceSubId: number | null = null;
   private logsSubId: number | null = null;
+  private readonly presenceCodec: Codec<P>;
+  private readonly messageCodec: Codec<M>;
 
   constructor(
     readonly address: PublicKey,
     readonly presenceAddress: PublicKey,
     private readonly ctx: RoomContext,
     private readonly codec: Codec<T>,
-    private readonly messageCodec: Codec<M> = jsonCodec<M>(),
-  ) {}
+    messageCodec?: Codec<M>,
+    presenceCodec?: Codec<P>,
+  ) {
+    this.messageCodec = messageCodec ?? jsonCodec<M>();
+    // When P differs from T a presenceCodec must be supplied; the default
+    // (sharing the state codec) is only sound for the P = T case.
+    this.presenceCodec = presenceCodec ?? (codec as unknown as Codec<P>);
+  }
 
   private get walletPubkey(): PublicKey {
     return isKeypair(this.ctx.wallet)
@@ -95,7 +103,7 @@ export class Room<T = unknown, M = unknown> {
   }
 
   /** Subscribe to every player's presence updates (cursor positions, etc.). */
-  onPresence(listener: (u: PresenceUpdate<T>) => void): () => void {
+  onPresence(listener: (u: PresenceUpdate<P>) => void): () => void {
     this.presenceListeners.add(listener);
     if (this.presenceSubId === null) {
       this.presenceSubId = this.ctx.er.onProgramAccountChange(
@@ -109,7 +117,7 @@ export class Room<T = unknown, M = unknown> {
           }
           const update = {
             player: presence.player,
-            data: this.codec.decode(Uint8Array.from(presence.data)),
+            data: this.presenceCodec.decode(Uint8Array.from(presence.data)),
             seq: presence.seq.toNumber(),
           };
           for (const cb of this.presenceListeners) cb(update);
@@ -215,9 +223,9 @@ export class Room<T = unknown, M = unknown> {
 
   /** Publish this player's presence blob (position, status — sticky state
    *  others can read anytime; for one-shot events use `emit`). */
-  async broadcast(data: T, opts: BroadcastOptions = {}): Promise<string> {
+  async broadcast(data: P, opts: BroadcastOptions = {}): Promise<string> {
     const ix = await this.ctx.program.methods
-      .setPresence(Buffer.from(this.codec.encode(data)))
+      .setPresence(Buffer.from(this.presenceCodec.encode(data)))
       .accounts({
         presence: this.presenceAddress,
         signer: this.ctx.session.publicKey,

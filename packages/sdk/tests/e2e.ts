@@ -171,6 +171,40 @@ describe("solsocket e2e: two clients, one room", () => {
     assert.equal(tracker.players.size, 0);
   });
 
+  it("split codecs: JSON room state + binary struct presence", async function () {
+    this.timeout(60_000);
+    type Avatar = { x: number; y: number; facing: number };
+    const avatarCodec = structCodec<Avatar>([
+      ["x", "u16"],
+      ["y", "u16"],
+      ["facing", "u8"],
+    ]);
+    const name = `codec-${Date.now()}`;
+    const a = await sockA.joinOrCreate<{ door: boolean }, Avatar>(name, {
+      initialState: { door: false },
+      presenceCodec: avatarCodec,
+    });
+    const b = await sockB.joinOrCreate<{ door: boolean }, Avatar>(name, {
+      creator: alice.publicKey,
+      presenceCodec: avatarCodec,
+    });
+
+    const seen: Avatar[] = [];
+    const unsub = b.onPresence(({ player, data }) => {
+      if (player.equals(alice.publicKey)) seen.push(data);
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    await a.broadcast({ x: 123, y: 456, facing: 2 });
+    for (let i = 0; i < 40 && seen.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    unsub();
+    assert.deepEqual(seen[0], { x: 123, y: 456, facing: 2 });
+    assert.deepEqual((await b.getState())?.state, { door: false });
+    await b.leave();
+    await a.closeToBase();
+  });
+
   it("joinOrCreate: same name lands both clients in the same room", async function () {
     this.timeout(60_000);
     const name = `lobby-${Date.now()}`;

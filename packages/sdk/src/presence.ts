@@ -38,13 +38,13 @@ export interface PresenceTracker<T> {
  *     onLeave: (player) => removeAvatar(player),
  *   });
  */
-export function trackPresence<T, M>(
-  room: Room<T, M>,
-  opts: TrackPresenceOptions<T> = {},
-): PresenceTracker<T> {
+export function trackPresence<T, P, M>(
+  room: Room<T, P, M>,
+  opts: TrackPresenceOptions<P> = {},
+): PresenceTracker<P> {
   const staleMs = opts.staleMs ?? 5_000;
   const sweepMs = opts.sweepMs ?? 1_000;
-  const players = new Map<string, PresenceEntry<T>>();
+  const players = new Map<string, PresenceEntry<P>>();
 
   const unsub = room.onPresence(({ player, data, seq }) => {
     const key = player.toBase58();
@@ -96,16 +96,16 @@ export interface SmoothPresenceOptions {
  *     for (const [key, p] of players) drawAvatar(key, p.data.x, p.data.y);
  *   });
  */
-export function smoothPresence<T extends Record<string, unknown>, M>(
-  room: Room<T, M>,
-  render: (players: ReadonlyMap<string, PresenceEntry<T>>) => void,
+export function smoothPresence<T, P extends Record<string, unknown>, M>(
+  room: Room<T, P, M>,
+  render: (players: ReadonlyMap<string, PresenceEntry<P>>) => void,
   opts: SmoothPresenceOptions = {},
 ): () => void {
   const hz = opts.hz ?? 60;
   const delayMs = opts.delayMs ?? 120;
   const staleMs = opts.staleMs ?? 5_000;
 
-  type Sample = { data: T; at: number };
+  type Sample = { data: P; at: number };
   const buffers = new Map<string, { player: PublicKey; seq: number; a?: Sample; b: Sample }>();
 
   const unsub = room.onPresence(({ player, data, seq }) => {
@@ -120,7 +120,7 @@ export function smoothPresence<T extends Record<string, unknown>, M>(
     }
   });
 
-  const lerpFields = (a: T, b: T, t: number): T => {
+  const lerpFields = (a: P, b: P, t: number): P => {
     const out: Record<string, unknown> = { ...b };
     for (const k of Object.keys(b)) {
       const va = a[k];
@@ -129,19 +129,19 @@ export function smoothPresence<T extends Record<string, unknown>, M>(
         out[k] = va + (vb - va) * t;
       }
     }
-    return out as T;
+    return out as P;
   };
 
   const timer = setInterval(() => {
     const now = Date.now();
     const renderAt = now - delayMs;
-    const view = new Map<string, PresenceEntry<T>>();
+    const view = new Map<string, PresenceEntry<P>>();
     for (const [key, buf] of buffers) {
       if (now - buf.b.at > staleMs) {
         buffers.delete(key);
         continue;
       }
-      let data: T;
+      let data: P;
       if (buf.a && buf.b.at > buf.a.at && renderAt < buf.b.at) {
         const t = Math.max(0, (renderAt - buf.a.at) / (buf.b.at - buf.a.at));
         data = lerpFields(buf.a.data, buf.b.data, Math.min(1, t));

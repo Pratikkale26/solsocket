@@ -23,23 +23,29 @@ export interface ConnectOptions {
   session?: Keypair;
 }
 
-export interface CreateRoomOptions<T, M = unknown> {
+export interface CreateRoomOptions<T, P = T, M = unknown> {
   /** Unique per creator; random by default. */
   id?: number | BN;
   maxPlayers?: number;
   initialState?: T;
   codec?: Codec<T>;
+  /** Codec for `broadcast`/`onPresence` payloads (default: the state codec —
+   *  pass one whenever presence has a different shape than room state). */
+  presenceCodec?: Codec<P>;
   /** Codec for `emit`/`onMessage` payloads (default: JSON). */
   messageCodec?: Codec<M>;
 }
 
-export interface JoinRoomOptions<T, M = unknown> {
+export interface JoinRoomOptions<T, P = T, M = unknown> {
   codec?: Codec<T>;
+  /** Codec for `broadcast`/`onPresence` payloads (default: the state codec). */
+  presenceCodec?: Codec<P>;
   /** Codec for `emit`/`onMessage` payloads (default: JSON). */
   messageCodec?: Codec<M>;
 }
 
-export interface JoinOrCreateOptions<T, M = unknown> extends CreateRoomOptions<T, M> {
+export interface JoinOrCreateOptions<T, P = T, M = unknown>
+  extends CreateRoomOptions<T, P, M> {
   /** Whose named room to join. Defaults to this wallet — pass the room
    *  owner's pubkey to join someone else's named room. */
   creator?: PublicKey;
@@ -110,16 +116,16 @@ export class SolSocket {
    *
    *   const room = await sock.joinOrCreate("lobby", { creator: OWNER });
    */
-  async joinOrCreate<T = unknown, M = unknown>(
+  async joinOrCreate<T = unknown, P = T, M = unknown>(
     name: string,
-    opts: JoinOrCreateOptions<T, M> = {},
-  ): Promise<Room<T, M>> {
+    opts: JoinOrCreateOptions<T, P, M> = {},
+  ): Promise<Room<T, P, M>> {
     const creator = opts.creator ?? this.walletPubkey;
     const id = nameToRoomId(name);
     const address = roomPda(creator, id);
 
     const info = await this.base.getAccountInfo(address);
-    if (info) return this.joinRoom<T, M>(address, opts);
+    if (info) return this.joinRoom<T, P, M>(address, opts);
     if (!creator.equals(this.walletPubkey)) {
       throw new Error(
         `room "${name}" does not exist yet for creator ${creator.toBase58()} — ` +
@@ -127,11 +133,11 @@ export class SolSocket {
       );
     }
     try {
-      return await this.createRoom<T, M>({ ...opts, id });
+      return await this.createRoom<T, P, M>({ ...opts, id });
     } catch (err) {
       // Lost a create race: someone else's transaction landed first. Join it.
       const nowExists = await this.base.getAccountInfo(address);
-      if (nowExists) return this.joinRoom<T, M>(address, opts);
+      if (nowExists) return this.joinRoom<T, P, M>(address, opts);
       throw err;
     }
   }
@@ -141,9 +147,9 @@ export class SolSocket {
    * base-layer transaction, one wallet signature. Resolves when the room is
    * live on the ER.
    */
-  async createRoom<T = unknown, M = unknown>(
-    opts: CreateRoomOptions<T, M> = {},
-  ): Promise<Room<T, M>> {
+  async createRoom<T = unknown, P = T, M = unknown>(
+    opts: CreateRoomOptions<T, P, M> = {},
+  ): Promise<Room<T, P, M>> {
     const codec = opts.codec ?? jsonCodec<T>();
     const id = new BN(opts.id ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
     const creator = this.walletPubkey;
@@ -178,17 +184,17 @@ export class SolSocket {
     ];
     await this.sendBase(instructions);
     await this.waitForEr(room);
-    return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
+    return new Room<T, P, M>(room, presence, this.roomContext(), codec, opts.messageCodec, opts.presenceCodec);
   }
 
   /**
    * Join an existing room: create + delegate this player's presence slot.
    * Handles rejoin (rotating a lost session key) transparently.
    */
-  async joinRoom<T = unknown, M = unknown>(
+  async joinRoom<T = unknown, P = T, M = unknown>(
     roomAddress: PublicKey | string,
-    opts: JoinRoomOptions<T, M> = {},
-  ): Promise<Room<T, M>> {
+    opts: JoinRoomOptions<T, P, M> = {},
+  ): Promise<Room<T, P, M>> {
     const codec = opts.codec ?? jsonCodec<T>();
     const room = new PublicKey(roomAddress);
     const player = this.walletPubkey;
@@ -204,7 +210,7 @@ export class SolSocket {
       // the wallet (allowed on-chain) and rejoining fresh.
       const current = decodePresence(this.program, info.data);
       if (current.authority.equals(this.session.publicKey)) {
-        return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
+        return new Room<T, P, M>(room, presence, this.roomContext(), codec, opts.messageCodec, opts.presenceCodec);
       }
       await this.recoverPresence(presence);
     }
@@ -233,7 +239,7 @@ export class SolSocket {
     );
     await this.sendBase(instructions);
     await this.waitForEr(presence);
-    return new Room<T, M>(room, presence, this.roomContext(), codec, opts.messageCodec);
+    return new Room<T, P, M>(room, presence, this.roomContext(), codec, opts.messageCodec, opts.presenceCodec);
   }
 
   private roomContext() {
