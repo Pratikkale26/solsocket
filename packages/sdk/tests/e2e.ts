@@ -1,8 +1,25 @@
 import { Connection, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import assert from "node:assert/strict";
-import { LOCAL, SolSocket } from "../src";
+import { LOCAL, SolSocket, structCodec, trackPresence } from "../src";
 
 type Cursor = { x: number; y: number };
+
+describe("structCodec", () => {
+  it("roundtrips a compact avatar struct", () => {
+    type Avatar = { x: number; y: number; facing: number; live: boolean; name: string };
+    const codec = structCodec<Avatar>([
+      ["x", "u16"],
+      ["y", "u16"],
+      ["facing", "u8"],
+      ["live", "bool"],
+      ["name", "string"],
+    ]);
+    const avatar = { x: 420, y: 69, facing: 3, live: true, name: "pratik" };
+    const bytes = codec.encode(avatar);
+    assert.equal(bytes.length, 2 + 2 + 1 + 1 + 4 + 6); // 16B vs ~60B as JSON
+    assert.deepEqual(codec.decode(bytes), avatar);
+  });
+});
 
 describe("solsocket e2e: two clients, one room", () => {
   const alice = Keypair.generate();
@@ -125,6 +142,33 @@ describe("solsocket e2e: two clients, one room", () => {
     unsub();
     assert.ok(received.length > 0, "state update should arrive over WS");
     assert.deepEqual(received[received.length - 1].data, { x: 9, y: 9 });
+  });
+
+  it("trackPresence: join and stale-leave lifecycle (ghost-avatar fix)", async function () {
+    this.timeout(20_000);
+    const joins: string[] = [];
+    const leaves: string[] = [];
+    const tracker = trackPresence(roomB, {
+      staleMs: 1_500,
+      sweepMs: 200,
+      onJoin: (e) => joins.push(e.player.toBase58()),
+      onLeave: (p) => leaves.push(p.toBase58()),
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    await roomA.broadcast({ x: 5, y: 5 });
+    for (let i = 0; i < 40 && joins.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(joins.includes(alice.publicKey.toBase58()), "join fires on first update");
+
+    // Alice goes silent (tab closed without leave()): the sweep drops her.
+    for (let i = 0; i < 40 && leaves.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    tracker.stop();
+    assert.ok(leaves.includes(alice.publicKey.toBase58()), "stale player leaves");
+    assert.equal(tracker.players.size, 0);
   });
 
   it("joinOrCreate: same name lands both clients in the same room", async function () {
