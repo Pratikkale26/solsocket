@@ -133,7 +133,6 @@ describe("emit_event via logsSubscribe on the ER", () => {
 
     for (let i = 0; i < 50 && received.length === 0; i++)
       await new Promise((r) => setTimeout(r, 100));
-    await erConnection.removeOnLogsListener(subId);
 
     assert.ok(received.length > 0, "log subscription should deliver the event");
     const ev = received[0];
@@ -141,6 +140,20 @@ describe("emit_event via logsSubscribe on the ER", () => {
     assert.match(ev.name, /roomEvent/i);
     assert.equal(ev.player, wallet.publicKey.toBase58());
     assert.equal(ev.text, "hello from the ER");
+
+    // Warm-connection runs: the first emit pays TLS/blockhash cold-start.
+    for (let n = 0; n < 3; n++) {
+      const count = received.length;
+      t0 = Date.now();
+      await programErSession.methods
+        .emitEvent("chat", Buffer.from(`warm ${n}`, "utf8"))
+        .accounts({ room: roomPda, presence: presencePda, signer: session.publicKey })
+        .rpc();
+      for (let i = 0; i < 50 && received.length === count; i++)
+        await new Promise((r) => setTimeout(r, 20));
+      console.log(`warm emit #${n}: delivered in ${received[received.length - 1]?.ms}ms`);
+    }
+    await erConnection.removeOnLogsListener(subId);
   });
 
   it("rejects an emit from a non-member session key", async () => {
