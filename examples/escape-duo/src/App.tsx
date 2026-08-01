@@ -1,6 +1,13 @@
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PresenceEntry, Room, SolSocket, smoothPresence, structCodec } from "solsocket";
+import {
+  PresenceEntry,
+  Room,
+  RoomListing,
+  SolSocket,
+  smoothPresence,
+  structCodec,
+} from "solsocket";
 import {
   Bubble,
   DOOR1,
@@ -34,7 +41,9 @@ type Player = { x: number; y: number; facing: number; name: string };
 type ChatMsg = { text: string };
 type Vault = Room<VaultState, Player, ChatMsg>;
 
-const joinTarget = params.get("room");
+let joinTarget = params.get("room");
+/** ?watch=1 — spectate: no join tx, no fees, no funded wallet needed. */
+const watchMode = params.get("watch") === "1" && joinTarget !== null;
 
 /* ──────────────────────────────────────────────────────────────────────────
  * The realtime integration: binary presence for the two players, shared
@@ -60,15 +69,19 @@ const FRESH_VAULT: VaultState = { level: 0, doors: 0, keyA: 0, keyB: 0, start: 0
 async function goLive(): Promise<Vault> {
   const sock = SolSocket.connect({ wallet, cluster, region });
   const opts = { codec: vaultCodec, presenceCodec: playerCodec };
-  const room = joinTarget
-    ? await sock.joinRoom<VaultState, Player, ChatMsg>(new PublicKey(joinTarget), opts)
-    : await sock.createRoom<VaultState, Player, ChatMsg>({
-        ...opts,
-        maxPlayers: 2,
-        initialState: FRESH_VAULT,
-      });
+  const room = watchMode
+    ? await sock.spectate<VaultState, Player, ChatMsg>(new PublicKey(joinTarget!), opts)
+    : joinTarget
+      ? await sock.joinRoom<VaultState, Player, ChatMsg>(new PublicKey(joinTarget), opts)
+      : await sock.createRoom<VaultState, Player, ChatMsg>({
+          ...opts,
+          maxPlayers: 2,
+          initialState: FRESH_VAULT,
+        });
   const suffix =
-    (cluster === "local" ? "&cluster=local" : "") + (region ? `&region=${region}` : "");
+    (cluster === "local" ? "&cluster=local" : "") +
+    (region ? `&region=${region}` : "") +
+    (watchMode ? "&watch=1" : "");
   history.replaceState(null, "", `?room=${room.address.toBase58()}${suffix}`);
   return room;
 }
@@ -103,6 +116,8 @@ export default function App() {
   const [echo, setEcho] = useState<number | null>(null);
   const [chatDraft, setChatDraft] = useState("");
   const [showHint, setShowHint] = useState(true);
+  const [board, setBoard] = useState<{ addr: string; time: number }[]>([]);
+  const [live, setLive] = useState<RoomListing[]>([]);
 
   const roomRef = useRef<Vault | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -134,6 +149,37 @@ export default function App() {
 
   useEffect(() => {
     void refreshBalance();
+    // Leaderboard + live vaults: every vault is a room on the rollup, and
+    // peekState reads any room's state without joining — no server anywhere.
+    const sock = SolSocket.connect({ wallet, cluster, region });
+    sock
+      .listRooms()
+      .then(async (rooms) => {
+        setLive(rooms.filter((r) => r.maxPlayers === 2 && r.players > 0).slice(0, 4));
+        const peeks = await Promise.all(
+          rooms.slice(0, 24).map(async (r) => ({
+            addr: r.address.toBase58(),
+            s: await sock.peekState<VaultState>(r.address, vaultCodec).catch(() => null),
+          })),
+        );
+        const plausibleTs = (t: number) => t > 1.5e12 && t < 4e12;
+        setBoard(
+          peeks
+            .flatMap(({ addr, s }) => {
+              if (!s) return [];
+              const v = s.state;
+              // Other apps' rooms share the program — filter to states that
+              // genuinely look like finished vault runs.
+              if (!isFinal(v) || v.level >= LEVELS.length + 1 || !solvedKeys(v)) return [];
+              if (!plausibleTs(v.run) || !plausibleTs(v.keyA)) return [];
+              const time = Math.max(v.keyA, v.keyB) - v.run;
+              return time > 10_000 ? [{ addr, time }] : [];
+            })
+            .sort((a, b) => a.time - b.time)
+            .slice(0, 5),
+        );
+      })
+      .catch(() => {});
   }, [refreshBalance]);
 
   const syncUi = () => {
@@ -149,6 +195,7 @@ export default function App() {
    *  silently dropped write would leave the two players in different
    *  realities, which is worse than a late one. */
   const pushState = (tries = 5) => {
+    if (watchMode) return; // spectators hold no presence slot — read-only
     sent.current += 1;
     roomRef.current?.setState({ ...vault.current }).catch(() => {
       if (tries > 1) setTimeout(() => pushState(tries - 1), 1_500);
@@ -199,6 +246,7 @@ export default function App() {
   /** Either player advances the run once a level is solved. Idempotent —
    *  a double click or a simultaneous click from both players is harmless. */
   const advance = () => {
+    if (watchMode) return; // players decide when to advance, not the audience
     const v = vault.current;
     if (!solvedKeys(v) || isFinal(v)) return;
     buf.current = "";
@@ -212,10 +260,14 @@ export default function App() {
     try {
       const room = await goLive();
       roomRef.current = room;
-      const roleKey = `solsocket-escape:role:${room.address.toBase58()}`;
-      const stored = localStorage.getItem(roleKey);
-      roleRef.current = stored !== null ? Number(stored) : joinTarget ? 1 : 0;
-      localStorage.setItem(roleKey, String(roleRef.current));
+      if (watchMode) {
+        roleRef.current = -1; // spectator: no panel, no keypad, no key
+      } else {
+        const roleKey = `solsocket-escape:role:${room.address.toBase58()}`;
+        const stored = localStorage.getItem(roleKey);
+        roleRef.current = stored !== null ? Number(stored) : joinTarget ? 1 : 0;
+        localStorage.setItem(roleKey, String(roleRef.current));
+      }
       room.onStateChange(({ state }) => applyState(state));
       const first = await room.getState();
       if (first) applyState(first.state);
@@ -263,6 +315,7 @@ export default function App() {
     };
 
     const broadcast = (force = false) => {
+      if (watchMode) return; // spectators are invisible — nothing to publish
       const now = Date.now();
       if (!force && now - lastSend < 100) return;
       lastSend = now;
@@ -292,6 +345,7 @@ export default function App() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (watchMode) return; // spectators only watch
       if (e.key === "Enter") {
         chatInputRef.current?.focus();
         return;
@@ -341,7 +395,8 @@ export default function App() {
 
     const counters = setInterval(() => {
       setTxCount(sent.current);
-      setOnline(1 + [...remotes.current.keys()].filter((k) => k !== selfKey).length);
+      const others = [...remotes.current.keys()].filter((k) => k !== selfKey).length;
+      setOnline(watchMode ? others : 1 + others);
       const v = vault.current;
       if (v.run > 0)
         setClock(
@@ -367,13 +422,17 @@ export default function App() {
         broadcast(true);
       }
 
+      // Spectators have no avatar: judge the lever purely from the players.
+      const tiles = watchMode
+        ? [...remotes.current.values()].map((e) => tileUnder(L, e.data.x, e.data.y))
+        : [];
       const p = partner();
-      const pTile = p ? tileUnder(L, p.data.x, p.data.y) : "";
-      const myTile = tileUnder(L, me.x, me.y);
+      const pTile = watchMode ? (tiles[1] ?? "") : p ? tileUnder(L, p.data.x, p.data.y) : "";
+      const myTile = watchMode ? (tiles[0] ?? "") : tileUnder(L, me.x, me.y);
       const leverHeld = myTile === "L" || pTile === "L";
       const frozen = solvedKeys(v);
 
-      if (!typing() && !frozen) {
+      if (!typing() && !frozen && !watchMode) {
         const speed = 130;
         let vx = 0;
         let vy = 0;
@@ -397,6 +456,7 @@ export default function App() {
       // re-firing on a cooldown until the state sticks — a single dropped
       // write must never dead-lock the vault.
       if (
+        !watchMode &&
         !(v.doors & DOOR1) &&
         Date.now() - lastLatch > 1_500 &&
         ((myTile === "P" && pTile === "Q") || (myTile === "Q" && pTile === "P"))
@@ -450,12 +510,13 @@ export default function App() {
         if (key === selfKey) continue;
         drawPlayer(ctx, key, pp.data, { chat: chats.current.get(key) });
       }
-      drawPlayer(
-        ctx,
-        selfKey,
-        { x: me.x, y: me.y, facing: me.facing, name },
-        { self: true, chat: chats.current.get(selfKey) },
-      );
+      if (!watchMode)
+        drawPlayer(
+          ctx,
+          selfKey,
+          { x: me.x, y: me.y, facing: me.facing, name },
+          { self: true, chat: chats.current.get(selfKey) },
+        );
 
       raf = requestAnimationFrame(frame);
     };
@@ -501,8 +562,10 @@ export default function App() {
   const lvName = LEVELS[Math.min(level, LEVELS.length - 1)].name;
   const objective = !room
     ? ""
-    : online < 2 && !(doors & DOOR1) && level === 0 && !out
-      ? "waiting for your partner — this vault needs two"
+    : watchMode
+      ? `spectating${online ? "" : " — nobody inside right now"} · every move you see is a signed onchain transaction`
+      : online < 2 && !(doors & DOOR1) && level === 0 && !out
+        ? "waiting for your partner — this vault needs two"
       : out
         ? "you escaped — verify it on the explorer"
         : cleared
@@ -534,7 +597,14 @@ export default function App() {
             <button onClick={() => navigator.clipboard.writeText(location.href)}>
               copy invite link
             </button>
-            <span>{online}/2 inside</span>
+            <span>{watchMode ? `watching · ${online}/2 inside` : `${online}/2 inside`}</span>
+            {!watchMode && (
+              <button
+                onClick={() => navigator.clipboard.writeText(`${location.href}&watch=1`)}
+              >
+                copy watch link
+              </button>
+            )}
             <span className="metric">
               lvl {level + 1}/{LEVELS.length} · {lvName}
             </span>
@@ -566,31 +636,78 @@ export default function App() {
             on an ephemeral rollup
             {cluster === "local" ? " (local stack)" : " (devnet)"}.
           </p>
-          <p>
-            burner: <code>{wallet.publicKey.toBase58()}</code>
-            <br />
-            balance: {balance === null ? "…" : `${balance.toFixed(4)} SOL`} — needs
-            ~0.01 once for vault rent
-          </p>
-          <label>
-            display name{" "}
-            <input
-              value={name}
-              maxLength={12}
-              onChange={(e) => setName(e.target.value.replace(/[^\w-]/g, ""))}
-            />
-          </label>
-          <div className="row">
-            <button onClick={airdrop}>request devnet airdrop</button>
-            <button
-              className="primary"
-              disabled={balance !== null && balance < 0.01}
-              onClick={enter}
-            >
-              {joinTarget ? "enter your partner's vault" : "open a new vault"}
-            </button>
-          </div>
+          {watchMode ? (
+            <>
+              <p>
+                You're about to <b>spectate</b> — reading a live room straight off
+                the rollup. No transaction, no fees, your wallet never needs
+                funding.
+              </p>
+              <div className="row">
+                <button className="primary" onClick={enter}>
+                  watch this vault live
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p>
+                burner: <code>{wallet.publicKey.toBase58()}</code>
+                <br />
+                balance: {balance === null ? "…" : `${balance.toFixed(4)} SOL`} — needs
+                ~0.01 once for vault rent
+              </p>
+              <label>
+                display name{" "}
+                <input
+                  value={name}
+                  maxLength={12}
+                  onChange={(e) => setName(e.target.value.replace(/[^\w-]/g, ""))}
+                />
+              </label>
+              <div className="row">
+                <button onClick={airdrop}>request devnet airdrop</button>
+                <button
+                  className="primary"
+                  disabled={balance !== null && balance < 0.01}
+                  onClick={enter}
+                >
+                  {joinTarget ? "enter your partner's vault" : "open a new vault"}
+                </button>
+              </div>
+            </>
+          )}
           {error && <p className="error">{error}</p>}
+          {!joinTarget && board.length > 0 && (
+            <div className="worlds">
+              <p>fastest escapes — read straight off the rollup, no server:</p>
+              {board.map((b, i) => (
+                <div key={b.addr} className="boardrow">
+                  <span className="rank">#{i + 1}</span>
+                  <span className="btime">{fmtTime(b.time)}</span>
+                  <code>{b.addr.slice(0, 8)}…</code>
+                </div>
+              ))}
+            </div>
+          )}
+          {!joinTarget && live.length > 0 && (
+            <div className="worlds">
+              <p>…or watch a vault that's live right now:</p>
+              {live.map((w) => (
+                <button
+                  key={w.address.toBase58()}
+                  onClick={() => {
+                    const suffix =
+                      (cluster === "local" ? "&cluster=local" : "") +
+                      (region ? `&region=${region}` : "");
+                    location.href = `${location.pathname}?room=${w.address.toBase58()}${suffix}&watch=1`;
+                  }}
+                >
+                  {w.address.toBase58().slice(0, 8)}… · {w.players}/2 inside · watch ▸
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -605,7 +722,7 @@ export default function App() {
 
       <div className="stage" style={{ display: phase === "live" ? "block" : "none" }}>
         <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
-        {phase === "live" && online < 2 && level === 0 && !(doors & DOOR1) && !out && (
+        {phase === "live" && !watchMode && online < 2 && level === 0 && !(doors & DOOR1) && !out && (
           <div className="hint">
             <b>waiting for your partner</b>
             <div>this vault needs two — send the invite link</div>
@@ -614,7 +731,7 @@ export default function App() {
             </button>
           </div>
         )}
-        {phase === "live" && online >= 2 && showHint && !out && !cleared && (
+        {phase === "live" && !watchMode && online >= 2 && showHint && !out && !cleared && (
           <div className="hint" onClick={() => setShowHint(false)}>
             <b>escape together — {LEVELS.length} levels</b>
             <div>
@@ -641,9 +758,11 @@ export default function App() {
               next: {LEVELS[Math.min(level + 1, LEVELS.length - 1)].name} — key window{" "}
               {(LEVELS[Math.min(level + 1, LEVELS.length - 1)].keyWindowMs / 1000).toFixed(1)}s
             </div>
-            <button className="primary" onClick={advance}>
-              next level →
-            </button>
+            {!watchMode && (
+              <button className="primary" onClick={advance}>
+                next level →
+              </button>
+            )}
           </div>
         )}
         {out && (
@@ -685,15 +804,17 @@ export default function App() {
             </span>
           ))}
         </div>
-        <form className="chatbar" onSubmit={sendChat}>
-          <input
-            ref={chatInputRef}
-            value={chatDraft}
-            placeholder="Enter to chat — relay those codes · WASD move · E use"
-            onChange={(e) => setChatDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && chatInputRef.current?.blur()}
-          />
-        </form>
+        {!watchMode && (
+          <form className="chatbar" onSubmit={sendChat}>
+            <input
+              ref={chatInputRef}
+              value={chatDraft}
+              placeholder="Enter to chat — relay those codes · WASD move · E use"
+              onChange={(e) => setChatDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && chatInputRef.current?.blur()}
+            />
+          </form>
+        )}
       </div>
     </div>
   );

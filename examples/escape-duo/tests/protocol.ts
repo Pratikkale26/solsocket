@@ -160,6 +160,19 @@ async function main() {
   const A = new Client("A", roomA, "keyA");
   const B = new Client("B", roomB, "keyB");
 
+  // ── spectator: a NEVER-FUNDED wallet watches the room — no tx, no fees ──
+  console.log("· spectator joins (0 SOL wallet, no transaction)");
+  const walletS = Keypair.generate(); // deliberately unfunded, stays at 0
+  const sockS = SolSocket.connect({ wallet: walletS, cluster: "devnet" });
+  const roomS = await sockS.spectate<VaultState, Player, { text: string }>(
+    roomA.address,
+    { codec: vaultCodec, presenceCodec: playerCodec },
+  );
+  let spectatorStates = 0;
+  let spectatorPresence = 0;
+  roomS.onStateChange(() => (spectatorStates += 1));
+  roomS.onPresence(() => (spectatorPresence += 1));
+
   // ── presence both ways (the plates need each side to see the other) ──
   console.log("· presence exchange");
   const t0 = Date.now();
@@ -218,6 +231,18 @@ async function main() {
   const chain2 = await roomB.getState();
   check(escaped(chain2!.state), "escape is on-chain");
   check((chain2!.state.doors & LATCH) !== 0, "LATCH survived the key writes");
+
+  // ── spectator + peekState verification ──
+  console.log("· spectator + peekState");
+  check(spectatorStates > 0, `spectator saw ${spectatorStates} state changes live`);
+  check(spectatorPresence > 0, `spectator saw ${spectatorPresence} presence updates live`);
+  const sBal = await sockS.base.getBalance(walletS.publicKey);
+  check(sBal === 0, "spectator wallet still holds 0 lamports — watching is free");
+  const peeked = await sockS.peekState<VaultState>(roomA.address, vaultCodec);
+  check(
+    peeked !== null && escaped(peeked.state),
+    "peekState reads the escaped run without joining",
+  );
 
   // ── level advance: BOTH players hit "next level" at the same instant ──
   console.log("· race: simultaneous level advance");

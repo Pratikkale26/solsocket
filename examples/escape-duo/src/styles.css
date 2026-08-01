@@ -314,3 +314,27 @@ canvas {
   font-size: 13px;
   color: #c7d3f5;
 }
+
+.boardrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+  font-size: 13px;
+}
+
+.boardrow .rank {
+  color: #9aa0b4;
+  width: 24px;
+}
+
+.boardrow .btime {
+  font-family: ui-monospace, monospace;
+  color: #4ade80;
+  width: 48px;
+}
+
+.boardrow code {
+  color: #8ab4ff;
+  font-size: 12px;
+}
