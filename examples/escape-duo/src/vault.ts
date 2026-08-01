@@ -216,16 +216,18 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
   ctx.font = "bold 11px ui-monospace, monospace";
   ctx.textAlign = "center";
   const panel = (p: { x: number; y: number }, mine: boolean) => {
+    ctx.font = "bold 10px ui-monospace, monospace";
     ctx.fillStyle = "#14151d";
-    ctx.fillRect(p.x - 11, p.y - 9, 22, 18);
+    ctx.fillRect(p.x - 23, p.y - 9, 46, 18);
     ctx.strokeStyle = mine ? "#4ade80" : "#3a3e55";
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(p.x - 11, p.y - 9, 22, 18);
+    ctx.strokeRect(p.x - 23, p.y - 9, 46, 18);
     ctx.fillStyle = mine ? "#4ade80" : "#565b73";
-    ctx.fillText(mine ? o.seeCode.join("") : "····", p.x, p.y + 4);
+    ctx.fillText(mine ? o.seeCode.join(" ") : "· · · ·", p.x, p.y + 4);
   };
   panel(POS.g, o.role === 0);
   panel(POS.G, o.role === 1);
+  ctx.font = "bold 11px ui-monospace, monospace";
 
   // keypads — each usable only by the player who CAN'T see its code
   const pad = (p: { x: number; y: number }, mine: boolean, solved: boolean) => {

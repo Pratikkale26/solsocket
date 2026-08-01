@@ -401,6 +401,19 @@ export default function App() {
   };
 
   const room = roomRef.current;
+  const objective = !room
+    ? ""
+    : online < 2 && !out
+      ? "waiting for your partner — this vault needs two"
+      : out
+        ? "you escaped — verify it on the explorer"
+        : !(doors & DOOR1)
+          ? "① one of you on each glowing plate — at the same moment"
+          : !(doors & LOCK1) || !(doors & LOCK2)
+            ? "② read your green panel to your partner (Enter to chat) — type the code they read you on your yellow keypad (0-9)"
+            : !(doors & LATCH)
+              ? "③ one stands on the lever to hold the gate — the other walks through and presses E on the switch"
+              : `④ you are key ${myRole() === 0 ? "A (top)" : "B (bottom)"} — count down in chat, both press E within 2 seconds`;
   const steps: [string, boolean][] = [
     ["plates", (doors & DOOR1) !== 0],
     ["codes", (doors & LOCK1) !== 0 && (doors & LOCK2) !== 0],
@@ -425,6 +438,7 @@ export default function App() {
             {clock && <span className="metric">⏱ {clock}</span>}
             <span className="metric">{txCount} onchain writes</span>
             {echo !== null && <span className="metric">{echo}ms echo</span>}
+            <button onClick={() => setShowHint(true)}>how to play</button>
             {cluster === "devnet" && (
               <a
                 href={`https://explorer.solana.com/address/${room.address.toBase58()}?cluster=devnet`}
@@ -544,6 +558,7 @@ export default function App() {
             </button>
           </div>
         )}
+        {objective && !out && <div className="objective">{objective}</div>}
         <div className="steps">
           {steps.map(([label, done]) => (
             <span key={label} className={done ? "step done" : "step"}>

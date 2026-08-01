@@ -304,3 +304,13 @@ canvas {
   color: #4ade80;
   border-color: #2c5e40;
 }
+
+.objective {
+  margin-top: 8px;
+  background: #1e2433;
+  border: 1px solid #34456b;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #c7d3f5;
+}
