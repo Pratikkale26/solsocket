@@ -38,6 +38,8 @@ await room.emit("chat", { text: "gm" }); // event in tx logs — no state write
 | `sock.createRoom<T>(opts?)` | create + join + delegate in one tx → `Room<T>` |
 | `sock.joinRoom<T>(address)` | join an existing room (handles rejoin/lost session) |
 | `sock.listRooms()` | every room live on the ER with player counts, busiest first |
+| `sock.peekState(address)` | read any room's state without joining — leaderboards, lobby previews |
+| `sock.spectate(address)` | watch a room read-only: live subscriptions, zero transactions, wallet never needs funding |
 | `room.broadcast(data)` | write your presence slot (fire-and-forget) |
 | `room.emit(name, data)` | ephemeral event in tx logs — chat, hits, reactions; no state write |
 | `room.setState(data)` | write the shared room state |

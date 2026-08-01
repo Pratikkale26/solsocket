@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (0.2.1)
+
+### Added
+
+- **`sock.peekState(address, codec?)`** — read any room's shared state
+  without joining it: no transaction, no membership. Live rooms read from
+  the ER, committed rooms fall through to the base layer. Powers
+  leaderboards and lobby previews.
+- **`sock.spectate(address, opts?)`** — a read-only `Room` wired to the
+  same realtime subscriptions (state, presence, messages) with NO join
+  transaction: no fees, no rent, the wallet never needs funding. Verified
+  on devnet: a 0-lamport wallet watching a live room.
+
+### Fixed
+
+- A byte-identical resend (same payload, same cached blockhash — e.g. an
+  idle presence heartbeat) was rejected as "already been processed" even
+  though the first copy landed; `sendInstructions` now surfaces it as the
+  success it is.
+
 ## 0.2.0 — 2026-08-01
 
 ### Added

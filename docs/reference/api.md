@@ -74,6 +74,21 @@ interface RoomListing {
 }
 ```
 
+### `sock.peekState<T>(address, codec?)`
+
+Read any room's shared state **without joining it** — no transaction, no
+membership. Live rooms are read from the ER; rooms already committed back
+fall through to the base layer. Returns `{ state, seq }` or `null`. Powers
+leaderboards and lobby previews.
+
+### `sock.spectate<T, P, M>(address, opts?)`
+
+Watch a room **read-only**: returns a `Room` wired to the same realtime
+subscriptions (`onStateChange` / `onPresence` / `onMessage`, plus
+`getState`) with no join transaction — no fees, no rent, and the wallet
+never needs funding. Write methods are rejected on-chain, since a spectator
+holds no presence slot.
+
 ## `Room<TState, TPresence, TMessage>`
 
 ### Writes (session-signed, zero-fee, on the ER)
