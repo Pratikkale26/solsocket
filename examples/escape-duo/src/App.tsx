@@ -112,9 +112,15 @@ export default function App() {
   const sentAt = useRef(0);
 
   const selfKey = wallet.publicKey.toBase58();
+  const partnerRef = useRef<string | null>(null);
 
-  const partnerKey = () =>
-    [...remotes.current.keys()].find((k) => k !== selfKey) ?? null;
+  /** Sticky: once a partner is seen, keep them even through a stale patch —
+   *  roles must never flip mid-game. */
+  const partnerKey = () => {
+    const live = [...remotes.current.keys()].find((k) => k !== selfKey);
+    if (live) partnerRef.current = live;
+    return partnerRef.current;
+  };
   /** Deterministic roles: the lexicographically smaller wallet is role 0. */
   const myRole = () => {
     const p = partnerKey();
@@ -249,9 +255,17 @@ export default function App() {
       setShowHint(false);
       keys.add(e.key.toLowerCase());
 
-      const pad = myPad();
-      if (/^[0-9]$/.test(e.key) && near(me.x, me.y, pad.x, pad.y, 1.3)) {
-        enterDigit(e.key);
+      if (/^[0-9]$/.test(e.key)) {
+        const pad = myPad();
+        const theirs = myRole() === 0 ? POS.k : POS.K;
+        if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
+          enterDigit(e.key);
+        } else if (near(me.x, me.y, theirs.x, theirs.y, 1.6)) {
+          chats.current.set(selfKey, {
+            text: "partner's keypad — yours has the yellow border",
+            until: Date.now() + 2_000,
+          });
+        }
         return;
       }
       if (e.key.toLowerCase() !== "e") return;
