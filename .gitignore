@@ -24,3 +24,6 @@ magicblock-engine-examples/
 
 # internal planning docs (not published)
 notes/
+
+# ts incremental build state
+*.tsbuildinfo
