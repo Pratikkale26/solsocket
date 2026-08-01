@@ -27,3 +27,7 @@ notes/
 
 # ts incremental build state
 *.tsbuildinfo
+
+# docs build output
+docs/.vitepress/dist/
+docs/.vitepress/cache/
