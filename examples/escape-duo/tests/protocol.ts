@@ -18,7 +18,14 @@ import { readFileSync } from "node:fs";
 import { Room, SolSocket, structCodec } from "solsocket";
 
 type Player = { x: number; y: number; facing: number; name: string };
-type VaultState = { doors: number; keyA: number; keyB: number; start: number };
+type VaultState = {
+  level: number;
+  doors: number;
+  keyA: number;
+  keyB: number;
+  start: number;
+  run: number;
+};
 type Vault = Room<VaultState, Player, { text: string }>;
 
 const playerCodec = structCodec<Player>([
@@ -28,10 +35,12 @@ const playerCodec = structCodec<Player>([
   ["name", "string"],
 ]);
 const vaultCodec = structCodec<VaultState>([
+  ["level", "u8"],
   ["doors", "u8"],
   ["keyA", "f64"],
   ["keyB", "f64"],
   ["start", "f64"],
+  ["run", "f64"],
 ]);
 const DOOR1 = 1,
   LOCK1 = 2,
@@ -42,7 +51,7 @@ const escaped = (s: VaultState) =>
 
 /** Replica of App.tsx's state handling — keep in sync with the app. */
 class Client {
-  vault: VaultState = { doors: 0, keyA: 0, keyB: 0, start: 0 };
+  vault: VaultState = { level: 0, doors: 0, keyA: 0, keyB: 0, start: 0, run: 0 };
   myKeyAt = 0;
   label: string;
   room: Vault;
@@ -63,6 +72,17 @@ class Client {
     this.pushState();
   }
   apply(s: VaultState) {
+    if (s.level > this.vault.level) {
+      // partner advanced — follow into the next level
+      this.vault = { ...s };
+      this.myKeyAt = 0;
+      return;
+    }
+    if (s.level < this.vault.level) {
+      // chain behind our advance — push again
+      this.pushState();
+      return;
+    }
     const merged = s.doors | this.vault.doors;
     const chainMissedBits = merged !== s.doors;
     this.vault = { ...s, doors: merged };
@@ -75,6 +95,17 @@ class Client {
   turnKey() {
     this.myKeyAt = Date.now();
     this.write({ [this.myKey]: this.myKeyAt } as Partial<VaultState>);
+  }
+  advance() {
+    this.myKeyAt = 0;
+    this.write({
+      level: this.vault.level + 1,
+      doors: 0,
+      keyA: 0,
+      keyB: 0,
+      start: 0,
+      run: this.vault.run,
+    });
   }
 }
 
@@ -115,7 +146,7 @@ async function main() {
   const roomA = await sockA.createRoom<VaultState, Player, { text: string }>({
     ...opts,
     maxPlayers: 2,
-    initialState: { doors: 0, keyA: 0, keyB: 0, start: 0 },
+    initialState: { level: 0, doors: 0, keyA: 0, keyB: 0, start: 0, run: 0 },
   });
   console.log("  vault:", roomA.address.toBase58());
 
@@ -158,8 +189,8 @@ async function main() {
   // ── race 1: BOTH clients latch door 1 at the same instant ──
   console.log("· race: simultaneous DOOR1 latch");
   const start = Date.now();
-  A.write({ doors: A.vault.doors | DOOR1, start });
-  B.write({ doors: B.vault.doors | DOOR1, start });
+  A.write({ doors: A.vault.doors | DOOR1, start, run: start });
+  B.write({ doors: B.vault.doors | DOOR1, start, run: start });
   await sleep(4_000);
   check((A.vault.doors & DOOR1) !== 0 && (B.vault.doors & DOOR1) !== 0, "DOOR1 on both clients");
 
@@ -187,6 +218,21 @@ async function main() {
   const chain2 = await roomB.getState();
   check(escaped(chain2!.state), "escape is on-chain");
   check((chain2!.state.doors & LATCH) !== 0, "LATCH survived the key writes");
+
+  // ── level advance: BOTH players hit "next level" at the same instant ──
+  console.log("· race: simultaneous level advance");
+  A.advance();
+  B.advance();
+  await sleep(6_000);
+  check(A.vault.level === 1 && B.vault.level === 1, `both on level 1 (A=${A.vault.level} B=${B.vault.level})`);
+  check(A.vault.doors === 0 && B.vault.doors === 0, "doors reset for the new level");
+  check(A.vault.run === start, "run clock survives the level change");
+  const chain3 = await roomA.getState();
+  check(chain3?.state.level === 1 && chain3.state.doors === 0, "level advance is on-chain");
+  // and progress works on the new level
+  A.write({ doors: A.vault.doors | DOOR1, start: Date.now() });
+  await sleep(4_000);
+  check((B.vault.doors & DOOR1) !== 0 && B.vault.level === 1, "level-2 DOOR1 syncs to B");
 
   // ── cleanup: state commits back to the base layer ──
   console.log("· cleanup: leave + closeToBase");

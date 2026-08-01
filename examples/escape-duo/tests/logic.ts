@@ -1,21 +1,23 @@
-/* Unit tests for escape-duo's pure game logic — run with node (type stripping). */
+/* Unit tests for escape-duo's pure game logic — run with node (type stripping).
+ * Includes a BFS reachability prover: for EVERY level, each puzzle element is
+ * reachable exactly when its prerequisite door bits are set — so no layout
+ * can ever ship with a sequence break. */
 import { Keypair } from "@solana/web3.js";
 import {
   COLS,
   DOOR1,
   LATCH,
+  LEVELS,
   LOCK1,
   LOCK2,
-  POS,
   ROWS,
-  SPAWN,
   TILE,
   codesFor,
-  escaped,
   near,
-  tileAt,
+  solvedKeys,
   tileUnder,
   walkable,
+  type Level,
 } from "../src/vault.ts";
 
 let pass = 0;
@@ -28,77 +30,128 @@ const ok = (cond: boolean, msg: string) => {
   }
 };
 
-// ── map integrity ──
-ok(ROWS === 12 && COLS === 28, `map is ${COLS}x${ROWS}`);
-for (const ch of [..."PQgGkKLSAB"]) ok(!!POS[ch], `POS has '${ch}'`);
-ok(tileUnder(SPAWN.x, SPAWN.y) === ".", "spawn is on open floor");
-
-// every special tile must be reachable floor (not inside a wall)
-for (const ch of [..."PQgGkKLSAB"]) {
-  const p = POS[ch];
-  const t = tileAt(Math.floor(p.x / TILE), Math.floor(p.y / TILE));
-  ok(t === ch, `POS['${ch}'] sits on its own tile (got '${t}')`);
+/** Tiles reachable from spawn walking with the given door bits / lever. */
+function reachable(lv: Level, doors: number, lever: boolean): Set<string> {
+  const seen = new Set<string>();
+  const startC = Math.floor(lv.spawn.x / TILE);
+  const startR = Math.floor(lv.spawn.y / TILE);
+  const queue: [number, number][] = [[startC, startR]];
+  seen.add(`${startC},${startR}`);
+  while (queue.length) {
+    const [c, r] = queue.pop()!;
+    for (const [dc, dr] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nc = c + dc;
+      const nr = r + dr;
+      const key = `${nc},${nr}`;
+      if (seen.has(key)) continue;
+      if (!walkable(lv, nc * TILE + TILE / 2, nr * TILE + TILE / 2, doors, lever)) continue;
+      seen.add(key);
+      queue.push([nc, nr]);
+    }
+  }
+  return seen;
 }
 
-// ── door gating ──
-const doorCol = (ch: string) => {
-  for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c < COLS; c++) if (tileAt(c, r) === ch) return { c, r };
-  throw new Error(`no '${ch}'`);
+const has = (set: Set<string>, lv: Level, ch: string) => {
+  const p = lv.pos[ch];
+  return set.has(`${Math.floor(p.x / TILE)},${Math.floor(p.y / TILE)}`);
 };
-const d1 = doorCol("1");
-const d2 = doorCol("2");
-const d3 = doorCol("3");
-const px = (c: number) => c * TILE + TILE / 2;
-ok(!walkable(px(d1.c), px(d1.r), 0, false), "door1 blocked at start");
-ok(walkable(px(d1.c), px(d1.r), DOOR1, false), "door1 open with DOOR1 bit");
-ok(!walkable(px(d2.c), px(d2.r), DOOR1 | LOCK1, false), "door2 needs BOTH locks");
-ok(walkable(px(d2.c), px(d2.r), DOOR1 | LOCK1 | LOCK2, false), "door2 open with both locks");
-ok(!walkable(px(d3.c), px(d3.r), DOOR1 | LOCK1 | LOCK2, false), "gate3 blocked unheld");
-ok(walkable(px(d3.c), px(d3.r), DOOR1 | LOCK1 | LOCK2, true), "gate3 passable while lever held");
-ok(walkable(px(d3.c), px(d3.r), DOOR1 | LOCK1 | LOCK2 | LATCH, false), "gate3 open once latched");
-ok(!walkable(px(27), px(5), 0xff, true), "vault door '4' never walkable");
 
-// left chamber is sealed without door1: no path check needed — the whole
-// column 7 must block except door tiles
-for (let r = 1; r < ROWS - 1; r++) {
-  const t = tileAt(7, r);
-  ok(t === "#" || t === "1", `col 7 row ${r} seals chamber 1 (got '${t}')`);
-}
-for (let r = 1; r < ROWS - 1; r++) {
-  const t = tileAt(14, r);
-  ok(t === "#" || t === "2", `col 14 row ${r} seals chamber 2 (got '${t}')`);
-}
-for (let r = 1; r < ROWS - 1; r++) {
-  const t = tileAt(20, r);
-  ok(t === "#" || t === "3", `col 20 row ${r} seals chamber 3 (got '${t}')`);
+for (const lv of LEVELS) {
+  const L = `[${lv.name}]`;
+  ok(tileUnder(lv, lv.spawn.x, lv.spawn.y) === ".", `${L} spawn on open floor`);
+  for (const ch of [..."PQgGkKLSAB"]) {
+    const p = lv.pos[ch];
+    ok(
+      lv.tile(Math.floor(p.x / TILE), Math.floor(p.y / TILE)) === ch,
+      `${L} pos['${ch}'] sits on its own tile`,
+    );
+  }
+
+  // phase 0: only the plates
+  const p0 = reachable(lv, 0, false);
+  ok(has(p0, lv, "P") && has(p0, lv, "Q"), `${L} plates reachable at start`);
+  for (const ch of [..."gGkKLSAB"])
+    ok(!has(p0, lv, ch), `${L} '${ch}' locked before door 1`);
+
+  // phase 1: door 1 open → the code chamber, nothing further
+  const p1 = reachable(lv, DOOR1, false);
+  for (const ch of [..."gGkK"]) ok(has(p1, lv, ch), `${L} '${ch}' reachable after door 1`);
+  for (const ch of [..."LSAB"]) ok(!has(p1, lv, ch), `${L} '${ch}' locked before door 2`);
+
+  // phase 2: both locks → the lever chamber; gate still blocks
+  const p2 = reachable(lv, DOOR1 | LOCK1 | LOCK2, false);
+  ok(has(p2, lv, "L"), `${L} lever reachable after door 2`);
+  for (const ch of [..."SAB"]) ok(!has(p2, lv, ch), `${L} '${ch}' blocked by unheld gate`);
+
+  // phase 3a: lever held → the final chamber opens
+  const p3 = reachable(lv, DOOR1 | LOCK1 | LOCK2, true);
+  for (const ch of [..."SAB"]) ok(has(p3, lv, ch), `${L} '${ch}' reachable while lever held`);
+
+  // phase 3b: latched → open without the lever
+  const p4 = reachable(lv, DOOR1 | LOCK1 | LOCK2 | LATCH, false);
+  for (const ch of [..."SAB"]) ok(has(p4, lv, ch), `${L} '${ch}' reachable once latched`);
+
+  // vault door never walkable
+  ok(
+    !walkable(lv, 27 * TILE + TILE / 2, 5 * TILE + TILE / 2, 0xff, true),
+    `${L} vault door '4' never walkable`,
+  );
+
+  // Keys are role-gated (that's the hard co-op guarantee — key A only
+  // answers to the creator), but keep them visibly far apart too.
+  const dist = Math.hypot(lv.pos.A.x - lv.pos.B.x, lv.pos.A.y - lv.pos.B.y);
+  ok(dist >= 7 * TILE, `${L} keys ${Math.round(dist)}px apart (≥7 tiles)`);
 }
 
-// switch S must be BEYOND gate 3 (col > 20) so it can't be latched early
-ok(POS.S.x > 20 * TILE, "switch S is past gate 3");
-// lever L must be BEFORE gate 3
-ok(POS.L.x < 20 * TILE, "lever L is before gate 3");
-// keys must not be reachable from each other within the 2s window by one
-// player: A and B are 6+ tiles apart
-ok(!near(POS.A.x, POS.A.y, POS.B.x, POS.B.y, 5), "keys A and B are far apart");
+ok(ROWS === 12 && COLS === 28, `all maps are ${COLS}x${ROWS}`);
 
-// ── codes ──
+// ── codes: deterministic, per-vault AND per-level ──
 const addr = Keypair.generate().publicKey;
-const c1 = codesFor(addr);
-const c2 = codesFor(addr);
-ok(JSON.stringify(c1) === JSON.stringify(c2), "codes deterministic per address");
-ok(c1.code1.length === 4 && c1.code2.length === 4, "codes are 4 digits");
-ok(c1.code1.every((d) => d >= 0 && d <= 9), "digits 0-9");
-const other = codesFor(Keypair.generate().publicKey);
-ok(JSON.stringify(c1) !== JSON.stringify(other), "different vault, different codes");
+ok(
+  JSON.stringify(codesFor(addr, 0)) === JSON.stringify(codesFor(addr, 0)),
+  "codes deterministic",
+);
+ok(
+  JSON.stringify(codesFor(addr, 0)) !== JSON.stringify(codesFor(addr, 1)),
+  "different level, different codes",
+);
+ok(
+  JSON.stringify(codesFor(addr, 0)) !== JSON.stringify(codesFor(Keypair.generate().publicKey, 0)),
+  "different vault, different codes",
+);
+for (const l of [0, 1, 2]) {
+  const c = codesFor(addr, l);
+  ok(
+    c.code1.length === 4 && c.code2.length === 4 && [...c.code1, ...c.code2].every((d) => d >= 0 && d <= 9),
+    `level ${l} codes are 4 digits 0-9`,
+  );
+}
 
-// ── escape condition ──
+// ── key window per level ──
 const now = Date.now();
-ok(!escaped({ doors: 0, keyA: 0, keyB: 0, start: 0 }), "not escaped at start");
-ok(!escaped({ doors: 0, keyA: now, keyB: 0, start: 0 }), "one key is not enough");
-ok(escaped({ doors: 0, keyA: now, keyB: now + 1_900, start: 0 }), "both keys within 2s");
-ok(!escaped({ doors: 0, keyA: now, keyB: now + 2_100, start: 0 }), "2.1s apart fails");
-ok(escaped({ doors: 0, keyA: now + 500, keyB: now, start: 0 }), "order doesn't matter");
+const st = (level: number, keyA: number, keyB: number) => ({
+  level,
+  doors: 0,
+  keyA,
+  keyB,
+  start: 0,
+  run: 0,
+});
+ok(!solvedKeys(st(0, 0, 0)), "not solved at start");
+ok(!solvedKeys(st(0, now, 0)), "one key is not enough");
+ok(solvedKeys(st(0, now, now + 1_900)), "level 1: 1.9s apart is inside 2s window");
+ok(!solvedKeys(st(0, now, now + 2_100)), "level 1: 2.1s apart fails");
+ok(!solvedKeys(st(1, now, now + 1_700)), "level 2: 1.7s apart fails the 1.6s window");
+ok(solvedKeys(st(1, now, now + 1_500)), "level 2: 1.5s apart passes");
+ok(!solvedKeys(st(2, now, now + 1_300)), "level 3: 1.3s apart fails the 1.2s window");
+ok(solvedKeys(st(2, now + 500, now)), "order doesn't matter");
+ok(near(0, 0, TILE, 0, 1.5), "near() sanity");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

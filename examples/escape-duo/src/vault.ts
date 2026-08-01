@@ -1,74 +1,150 @@
 import { PublicKey } from "@solana/web3.js";
 
-/** The Vault — four chambers, each puzzle solvable only by two players.
- *  Legend: `#` wall  `.` floor  `1` plate door  `2` code door  `3` held gate
+/** Escape levels. Every layout is 28×12 and carries the same puzzle chars:
+ *  `#` wall  `.` floor  `1` plate door  `2` code door  `3` held gate
  *  `4` vault door  `P`/`Q` pressure plates  `g`/`G` code panels  `k`/`K`
  *  keypads  `L` lever  `S` gate switch  `A`/`B` key stations */
 export const TILE = 24;
-
-const LAYOUT = [
-  "############################",
-  "#......#......#.....#......#",
-  "#..P...#..g...#.....#..A...#",
-  "#......#......#..L..#......#",
-  "#......1..k...2.....3.S....#",
-  "#......1......2.....3......4",
-  "#......1......2.....3......4",
-  "#......#..K...#.....#......#",
-  "#..Q...#......#.....#..B...#",
-  "#......#..G...#.....#......#",
-  "#......#......#.....#......#",
-  "############################",
-];
-
-export const ROWS = LAYOUT.length;
-export const COLS = LAYOUT[0].length;
+export const COLS = 28;
+export const ROWS = 12;
 export const WIDTH = COLS * TILE;
 export const HEIGHT = ROWS * TILE;
 
-for (const row of LAYOUT) {
-  if (row.length !== COLS) throw new Error(`map row length ${row.length} !== ${COLS}`);
+interface LevelDef {
+  name: string;
+  keyWindowMs: number;
+  spawnTile: { c: number; r: number };
+  layout: string[];
 }
 
-export const SPAWN = { x: 3.5 * TILE, y: 5.5 * TILE };
+const DEFS: LevelDef[] = [
+  {
+    name: "The Vault",
+    keyWindowMs: 2_000,
+    spawnTile: { c: 3, r: 5 },
+    layout: [
+      "############################",
+      "#......#......#.....#..A...#",
+      "#..P...#..g...#.....#......#",
+      "#......#......#..L..#......#",
+      "#......1..k...2.....3.S....#",
+      "#......1......2.....3......4",
+      "#......1......2.....3......4",
+      "#......#..K...#.....#......#",
+      "#..Q...#......#.....#......#",
+      "#......#..G...#.....#......#",
+      "#......#......#.....#..B...#",
+      "############################",
+    ],
+  },
+  {
+    name: "The Reactor",
+    keyWindowMs: 1_600,
+    spawnTile: { c: 5, r: 4 },
+    layout: [
+      "############################",
+      "#....P.#..K...#.....#..B...#",
+      "#..##..#......#.##..#......#",
+      "#..#...#..G...#.....#..##..#",
+      "#..#...1......2..L..3...#..#",
+      "#..##..1......2.....3...#..4",
+      "#...#..1......2.....3..##..4",
+      "#...#..#..g...#.##..#......#",
+      "#...#..#......#.....#.S....#",
+      "#......#..k...#.....#......#",
+      "#....Q.#......#.....#..A...#",
+      "############################",
+    ],
+  },
+  {
+    name: "The Core",
+    keyWindowMs: 1_200,
+    spawnTile: { c: 2, r: 2 },
+    layout: [
+      "############################",
+      "#P....##...k..#..L..#.A....#",
+      "#.....##......#.....#......#",
+      "#.##...#......#..#..#..#####",
+      "#......1..g...2..#..3......#",
+      "#.###..1......2..#..3......4",
+      "#...#..1......2.....3..###.4",
+      "#......#..G...#.....#....#.#",
+      "#..##..#......#..#..#....#.#",
+      "#......#...K..#.....#.S..#.#",
+      "#....Q.#......#.....#....B.#",
+      "############################",
+    ],
+  },
+];
 
-/** Shared vault state — one binary struct the whole room agrees on. */
+export interface Level {
+  index: number;
+  name: string;
+  keyWindowMs: number;
+  spawn: { x: number; y: number };
+  pos: Record<string, { x: number; y: number }>;
+  tile(c: number, r: number): string;
+}
+
+function build(def: LevelDef, index: number): Level {
+  if (def.layout.length !== ROWS) throw new Error(`${def.name}: needs ${ROWS} rows`);
+  for (const row of def.layout)
+    if (row.length !== COLS) throw new Error(`${def.name}: row length ${row.length} !== ${COLS}`);
+  const pos: Record<string, { x: number; y: number }> = {};
+  for (const ch of [..."PQgGkKLSAB"]) {
+    let found = 0;
+    for (let r = 0; r < ROWS; r++) {
+      const c = def.layout[r].indexOf(ch);
+      if (c >= 0) {
+        found += 1;
+        pos[ch] = { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2 };
+        if (def.layout[r].indexOf(ch, c + 1) >= 0) found += 1;
+      }
+    }
+    if (found !== 1) throw new Error(`${def.name}: needs exactly one '${ch}' (found ${found})`);
+  }
+  const tile = (c: number, r: number) =>
+    c < 0 || c >= COLS || r < 0 || r >= ROWS ? "#" : def.layout[r][c];
+  return {
+    index,
+    name: def.name,
+    keyWindowMs: def.keyWindowMs,
+    spawn: { x: def.spawnTile.c * TILE + TILE / 2, y: def.spawnTile.r * TILE + TILE / 2 },
+    pos,
+    tile,
+  };
+}
+
+export const LEVELS: Level[] = DEFS.map(build);
+
+/** Shared vault state — one binary struct the whole run agrees on. */
 export type VaultState = {
-  doors: number; // progress bitfield
+  level: number; // current level index — both players always move together
+  doors: number; // progress bitfield, per level
   keyA: number; // ms timestamp of key A's last turn
   keyB: number;
-  start: number; // ms timestamp set when the run begins (door 1 opens)
+  start: number; // ms timestamp: this level's clock
+  run: number; // ms timestamp: the whole run's clock (set once, level 0)
 };
 export const DOOR1 = 1; // both plates pressed at once
 export const LOCK1 = 2; // keypad k solved
 export const LOCK2 = 4; // keypad K solved
 export const LATCH = 8; // gate switch hit — gate 3 stays open
-export const KEY_WINDOW_MS = 2_000;
 
-export const escaped = (s: VaultState) =>
-  s.keyA > 0 && s.keyB > 0 && Math.abs(s.keyA - s.keyB) <= KEY_WINDOW_MS;
+export const levelOf = (s: VaultState): Level =>
+  LEVELS[Math.min(Math.max(s.level, 0), LEVELS.length - 1)];
 
-export function tileAt(col: number, row: number): string {
-  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return "#";
-  return LAYOUT[row][col];
-}
+/** Both keys turned inside this level's window? */
+export const solvedKeys = (s: VaultState) =>
+  s.keyA > 0 && s.keyB > 0 && Math.abs(s.keyA - s.keyB) <= levelOf(s).keyWindowMs;
 
-export const tileUnder = (x: number, y: number) =>
-  tileAt(Math.floor(x / TILE), Math.floor(y / TILE));
+export const isFinal = (s: VaultState) => s.level >= LEVELS.length - 1;
 
-/** Center of the (unique) tile carrying a legend character. */
-function findTile(ch: string) {
-  for (let r = 0; r < ROWS; r++) {
-    const c = LAYOUT[r].indexOf(ch);
-    if (c >= 0) return { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2 };
-  }
-  throw new Error(`map has no '${ch}' tile`);
-}
-export const POS = Object.fromEntries(
-  [..."PQgGkKLSAB"].map((ch) => [ch, findTile(ch)]),
-) as Record<string, { x: number; y: number }>;
+export const tileUnder = (lv: Level, x: number, y: number) =>
+  lv.tile(Math.floor(x / TILE), Math.floor(y / TILE));
 
 export function walkable(
+  lv: Level,
   x: number,
   y: number,
   doors: number,
@@ -81,7 +157,7 @@ export function walkable(
     [-half, half],
     [half, half],
   ] as const) {
-    const t = tileAt(Math.floor((x + dx) / TILE), Math.floor((y + dy) / TILE));
+    const t = lv.tile(Math.floor((x + dx) / TILE), Math.floor((y + dy) / TILE));
     if (t === "#" || t === "4") return false;
     if (t === "1" && !(doors & DOOR1)) return false;
     if (t === "2" && !(doors & LOCK1 && doors & LOCK2)) return false;
@@ -97,21 +173,22 @@ export function near(ax: number, ay: number, bx: number, by: number, tiles: numb
   return dx * dx + dy * dy <= r * r;
 }
 
-/** The two 4-digit codes, derived from the room address — same for every
- *  client, different for every vault. Each player can only SEE the code
- *  their partner must type: the relay is the puzzle. */
-export function codesFor(room: PublicKey): { code1: number[]; code2: number[] } {
+/** The two 4-digit codes for a level, derived from the room address — same
+ *  for every client, different per vault AND per level. Each player can only
+ *  SEE the code their partner must type: the relay is the puzzle. */
+export function codesFor(room: PublicKey, level: number): { code1: number[]; code2: number[] } {
   const b = room.toBytes();
+  const o = (level * 8) % 24;
   return {
-    code1: [...b.slice(0, 4)].map((n) => n % 10),
-    code2: [...b.slice(4, 8)].map((n) => n % 10),
+    code1: [...b.slice(o, o + 4)].map((n) => n % 10),
+    code2: [...b.slice(o + 4, o + 8)].map((n) => n % 10),
   };
 }
 
 export interface DrawOpts {
   t: number;
   doors: number;
-  escaped: boolean;
+  frozen: boolean; // level solved — pose for the overlay
   role: number; // 0 or 1 — decides which panel/keypad is "yours"
   seeCode: number[]; // the code THIS viewer can read off their panel
   buf: string; // digits typed so far on the viewer's keypad
@@ -119,11 +196,12 @@ export interface DrawOpts {
   partnerTile: string;
   keyA: number;
   keyB: number;
+  keyWindowMs: number;
 }
 
 const shade = (c: number, r: number) => (c * 7 + r * 13) % 3;
 
-export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
+export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts) {
   const gateOpen =
     (o.doors & LATCH) !== 0 || o.meTile === "L" || o.partnerTile === "L";
 
@@ -137,7 +215,7 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
       const x = c * TILE;
       const y = r * TILE;
       const v = shade(c, r);
-      const ch = tileAt(c, r);
+      const ch = lv.tile(c, r);
       switch (ch) {
         case "#": {
           ctx.fillStyle = ["#3d4150", "#424656", "#393d4b"][v];
@@ -169,9 +247,9 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
           break;
         }
         case "4": {
-          ctx.fillStyle = o.escaped ? "#141520" : "#8a6d1f";
+          ctx.fillStyle = o.frozen ? "#141520" : "#8a6d1f";
           ctx.fillRect(x, y, TILE, TILE);
-          if (!o.escaped) {
+          if (!o.frozen) {
             ctx.strokeStyle = "#d4a017";
             ctx.lineWidth = 2;
             ctx.beginPath();
@@ -195,25 +273,24 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
     ctx.lineWidth = 2;
     ctx.stroke();
   };
-  plate(POS.P, o.meTile === "P" || o.partnerTile === "P");
-  plate(POS.Q, o.meTile === "Q" || o.partnerTile === "Q");
+  plate(lv.pos.P, o.meTile === "P" || o.partnerTile === "P");
+  plate(lv.pos.Q, o.meTile === "Q" || o.partnerTile === "Q");
 
   // lever + switch
-  const lever = POS.L;
+  const lever = lv.pos.L;
   const held = o.meTile === "L" || o.partnerTile === "L";
   ctx.fillStyle = held ? "#facc15" : "#3a3e55";
   ctx.fillRect(lever.x - 3, lever.y - 10, 6, 20);
   ctx.beginPath();
   ctx.arc(lever.x, lever.y - 10, 5, 0, Math.PI * 2);
   ctx.fill();
-  const sw = POS.S;
+  const sw = lv.pos.S;
   ctx.beginPath();
   ctx.arc(sw.x, sw.y, 7, 0, Math.PI * 2);
   ctx.fillStyle = o.doors & LATCH ? "#4ade80" : "#f87171";
   ctx.fill();
 
   // code panels — only the right player can read each one
-  ctx.font = "bold 11px ui-monospace, monospace";
   ctx.textAlign = "center";
   const panel = (p: { x: number; y: number }, mine: boolean) => {
     ctx.font = "bold 10px ui-monospace, monospace";
@@ -225,8 +302,8 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
     ctx.fillStyle = mine ? "#4ade80" : "#565b73";
     ctx.fillText(mine ? o.seeCode.join(" ") : "· · · ·", p.x, p.y + 4);
   };
-  panel(POS.g, o.role === 0);
-  panel(POS.G, o.role === 1);
+  panel(lv.pos.g, o.role === 0);
+  panel(lv.pos.G, o.role === 1);
   ctx.font = "bold 11px ui-monospace, monospace";
 
   // keypads — each usable only by the player who CAN'T see its code
@@ -244,16 +321,16 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
       ctx.fillText(o.buf.padEnd(4, "·"), p.x, p.y - 15);
     }
   };
-  pad(POS.k, o.role === 1, (o.doors & LOCK1) !== 0);
-  pad(POS.K, o.role === 0, (o.doors & LOCK2) !== 0);
+  pad(lv.pos.k, o.role === 1, (o.doors & LOCK1) !== 0);
+  pad(lv.pos.K, o.role === 0, (o.doors & LOCK2) !== 0);
 
-  // key stations — pulse amber inside the 2s window, green once escaped
+  // key stations — pulse amber inside the window, green once solved
   const now = Date.now();
   const station = (p: { x: number; y: number }, ts: number, label: string) => {
-    const fresh = ts > 0 && now - ts <= KEY_WINDOW_MS;
+    const fresh = ts > 0 && now - ts <= o.keyWindowMs;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
-    ctx.fillStyle = o.escaped
+    ctx.fillStyle = o.frozen
       ? "#4ade80"
       : fresh
         ? `hsl(45 95% ${55 + Math.sin(o.t / 90) * 12}%)`
@@ -265,8 +342,8 @@ export function drawVault(ctx: CanvasRenderingContext2D, o: DrawOpts) {
     ctx.font = "bold 9px ui-monospace, monospace";
     ctx.fillText(label, p.x, p.y - 14);
   };
-  station(POS.A, o.keyA, "A");
-  station(POS.B, o.keyB, "B");
+  station(lv.pos.A, o.keyA, "A");
+  station(lv.pos.B, o.keyB, "B");
 }
 
 export const hueOf = (key: string) =>

@@ -5,18 +5,19 @@ import {
   Bubble,
   DOOR1,
   LATCH,
+  LEVELS,
   LOCK1,
   LOCK2,
   HEIGHT,
-  POS,
-  SPAWN,
   VaultState,
   WIDTH,
   codesFor,
   drawPlayer,
   drawVault,
-  escaped,
+  isFinal,
+  levelOf,
   near,
+  solvedKeys,
   tileUnder,
   walkable,
 } from "./vault";
@@ -47,12 +48,14 @@ const playerCodec = structCodec<Player>([
   ["name", "string"],
 ]);
 const vaultCodec = structCodec<VaultState>([
+  ["level", "u8"],
   ["doors", "u8"],
   ["keyA", "f64"],
   ["keyB", "f64"],
   ["start", "f64"],
+  ["run", "f64"],
 ]);
-const FRESH_VAULT: VaultState = { doors: 0, keyA: 0, keyB: 0, start: 0 };
+const FRESH_VAULT: VaultState = { level: 0, doors: 0, keyA: 0, keyB: 0, start: 0, run: 0 };
 
 async function goLive(): Promise<Vault> {
   const sock = SolSocket.connect({ wallet, cluster, region });
@@ -91,7 +94,9 @@ export default function App() {
   const [balance, setBalance] = useState<number | null>(null);
   const [name, setName] = useState(loadName);
   const [doors, setDoors] = useState(0);
-  const [out, setOut] = useState(false); // escaped!
+  const [level, setLevel] = useState(0);
+  const [cleared, setCleared] = useState(false); // level solved, more to go
+  const [out, setOut] = useState(false); // final level solved — escaped!
   const [online, setOnline] = useState(1);
   const [clock, setClock] = useState("");
   const [txCount, setTxCount] = useState(0);
@@ -131,6 +136,15 @@ export default function App() {
     void refreshBalance();
   }, [refreshBalance]);
 
+  const syncUi = () => {
+    const v = vault.current;
+    setDoors(v.doors);
+    setLevel(v.level);
+    const solved = solvedKeys(v);
+    setOut(solved && isFinal(v));
+    setCleared(solved && !isFinal(v));
+  };
+
   /** Send the vault state, retrying through transient ER failures — a
    *  silently dropped write would leave the two players in different
    *  realities, which is worse than a late one. */
@@ -145,13 +159,27 @@ export default function App() {
    *  local mirror optimistically so the UI never waits on the round trip. */
   const writeState = (patch: Partial<VaultState>) => {
     vault.current = { ...vault.current, ...patch };
-    setDoors(vault.current.doors);
+    syncUi();
     pushState();
   };
 
   const applyState = (s: VaultState) => {
-    // Never let a stale/raced write regress local progress bits...
-    const doorsMerged = s.doors | vault.current.doors;
+    const cur = vault.current;
+    if (s.level > cur.level) {
+      // Partner advanced the run — follow them into the next level.
+      vault.current = { ...s };
+      buf.current = "";
+      myKeyAt.current = 0;
+      syncUi();
+      return;
+    }
+    if (s.level < cur.level) {
+      // The chain hasn't caught up to our advance yet — push it again.
+      pushState();
+      return;
+    }
+    // Same level: never let a stale/raced write regress local progress bits...
+    const doorsMerged = s.doors | cur.doors;
     const chainMissedBits = doorsMerged !== s.doors;
     vault.current = { ...s, doors: doorsMerged };
     // ...and if a race wiped our own key-turn, restore it.
@@ -165,8 +193,17 @@ export default function App() {
     // If the chain lost progress bits we hold (a raced overwrite), write the
     // merged truth back so both clients reconverge.
     if (chainMissedBits) pushState();
-    setDoors(doorsMerged);
-    if (escaped(vault.current)) setOut(true);
+    syncUi();
+  };
+
+  /** Either player advances the run once a level is solved. Idempotent —
+   *  a double click or a simultaneous click from both players is harmless. */
+  const advance = () => {
+    const v = vault.current;
+    if (!solvedKeys(v) || isFinal(v)) return;
+    buf.current = "";
+    myKeyAt.current = 0;
+    writeState({ level: v.level + 1, doors: 0, keyA: 0, keyB: 0, start: 0, run: v.run });
   };
 
   const enter = async () => {
@@ -209,7 +246,8 @@ export default function App() {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     const keys = new Set<string>();
-    const me = { x: SPAWN.x, y: SPAWN.y, facing: 0 };
+    let curLevel = vault.current.level;
+    const me = { x: levelOf(vault.current).spawn.x, y: levelOf(vault.current).spawn.y, facing: 0 };
     let lastSend = 0;
     let lastMoved = 0;
     let lastLatch = 0;
@@ -218,15 +256,10 @@ export default function App() {
 
     const typing = () => document.activeElement === chatInputRef.current;
     const room = () => roomRef.current;
-    const codes = codesFor(room()!.address);
 
     const partner = () => {
       const p = partnerKey();
       return p ? remotes.current.get(p) : undefined;
-    };
-    const partnerTile = () => {
-      const p = partner();
-      return p ? tileUnder(p.data.x, p.data.y) : "";
     };
 
     const broadcast = (force = false) => {
@@ -243,10 +276,12 @@ export default function App() {
       });
     };
 
-    const myPad = () => (myRole() === 0 ? POS.K : POS.k);
+    const lv = () => levelOf(vault.current);
+    const myPad = () => (myRole() === 0 ? lv().pos.K : lv().pos.k);
     const enterDigit = (d: string) => {
       buf.current = (buf.current + d).slice(0, 4);
       if (buf.current.length < 4) return;
+      const codes = codesFor(room()!.address, vault.current.level);
       const want = (myRole() === 0 ? codes.code2 : codes.code1).join("");
       if (buf.current === want) {
         writeState({ doors: vault.current.doors | (myRole() === 0 ? LOCK2 : LOCK1) });
@@ -272,7 +307,7 @@ export default function App() {
       }
       if (/^[0-9]$/.test(e.key)) {
         const pad = myPad();
-        const theirs = myRole() === 0 ? POS.k : POS.K;
+        const theirs = myRole() === 0 ? lv().pos.k : lv().pos.K;
         if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
           enterDigit(e.key);
         } else if (near(me.x, me.y, theirs.x, theirs.y, 1.6)) {
@@ -284,13 +319,14 @@ export default function App() {
         return;
       }
       if (e.code !== "KeyE") return;
+      const L = lv();
       const d = vault.current.doors;
-      if (near(me.x, me.y, POS.S.x, POS.S.y, 1.3) && !(d & LATCH)) {
+      if (near(me.x, me.y, L.pos.S.x, L.pos.S.y, 1.3) && !(d & LATCH)) {
         writeState({ doors: d | LATCH });
-      } else if (myRole() === 0 && near(me.x, me.y, POS.A.x, POS.A.y, 1.3)) {
+      } else if (myRole() === 0 && near(me.x, me.y, L.pos.A.x, L.pos.A.y, 1.3)) {
         myKeyAt.current = Date.now();
         writeState({ keyA: myKeyAt.current });
-      } else if (myRole() === 1 && near(me.x, me.y, POS.B.x, POS.B.y, 1.3)) {
+      } else if (myRole() === 1 && near(me.x, me.y, L.pos.B.x, L.pos.B.y, 1.3)) {
         myKeyAt.current = Date.now();
         writeState({ keyB: myKeyAt.current });
       }
@@ -307,9 +343,11 @@ export default function App() {
       setTxCount(sent.current);
       setOnline(1 + [...remotes.current.keys()].filter((k) => k !== selfKey).length);
       const v = vault.current;
-      if (v.start > 0)
+      if (v.run > 0)
         setClock(
-          fmtTime((escaped(v) ? Math.max(v.keyA, v.keyB) : Date.now()) - v.start),
+          fmtTime(
+            (solvedKeys(v) && isFinal(v) ? Math.max(v.keyA, v.keyB) : Date.now()) - v.run,
+          ),
         );
       if (Date.now() - lastSend > 2_500) broadcast(true);
     }, 300);
@@ -317,12 +355,25 @@ export default function App() {
     const frame = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const pTile = partnerTile();
-      const myTile = tileUnder(me.x, me.y);
-      const leverHeld = myTile === "L" || pTile === "L";
       const v = vault.current;
+      const L = lv();
 
-      if (!typing() && !escaped(v)) {
+      // A level change moves both players back to the new level's spawn.
+      if (v.level !== curLevel) {
+        curLevel = v.level;
+        me.x = L.spawn.x;
+        me.y = L.spawn.y;
+        buf.current = "";
+        broadcast(true);
+      }
+
+      const p = partner();
+      const pTile = p ? tileUnder(L, p.data.x, p.data.y) : "";
+      const myTile = tileUnder(L, me.x, me.y);
+      const leverHeld = myTile === "L" || pTile === "L";
+      const frozen = solvedKeys(v);
+
+      if (!typing() && !frozen) {
         const speed = 130;
         let vx = 0;
         let vy = 0;
@@ -334,8 +385,8 @@ export default function App() {
           const len = Math.hypot(vx, vy);
           const nx = me.x + (vx / len) * speed * dt;
           const ny = me.y + (vy / len) * speed * dt;
-          if (walkable(nx, me.y, v.doors, leverHeld)) me.x = nx;
-          if (walkable(me.x, ny, v.doors, leverHeld)) me.y = ny;
+          if (walkable(L, nx, me.y, v.doors, leverHeld)) me.x = nx;
+          if (walkable(L, me.x, ny, v.doors, leverHeld)) me.y = ny;
           me.facing = vy < 0 ? 3 : vx < 0 ? 1 : vx > 0 ? 2 : 0;
           lastMoved = Date.now();
         }
@@ -351,16 +402,21 @@ export default function App() {
         ((myTile === "P" && pTile === "Q") || (myTile === "Q" && pTile === "P"))
       ) {
         lastLatch = Date.now();
-        writeState({ doors: v.doors | DOOR1, start: v.start || Date.now() });
+        writeState({
+          doors: v.doors | DOOR1,
+          start: v.start || Date.now(),
+          run: v.run || Date.now(),
+        });
       }
 
       // A half-typed code shouldn't linger: walking away clears the keypad.
       if (buf.current && !near(me.x, me.y, myPad().x, myPad().y, 1.6)) buf.current = "";
 
-      drawVault(ctx, {
+      const codes = codesFor(room()!.address, v.level);
+      drawVault(ctx, L, {
         t: now,
         doors: v.doors,
-        escaped: escaped(v),
+        frozen,
         role: myRole(),
         seeCode: myRole() === 0 ? codes.code1 : codes.code2,
         buf: buf.current,
@@ -368,6 +424,7 @@ export default function App() {
         partnerTile: pTile,
         keyA: v.keyA,
         keyB: v.keyB,
+        keyWindowMs: L.keyWindowMs,
       });
 
       // contextual prompts
@@ -375,22 +432,23 @@ export default function App() {
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       const pad = myPad();
-      const theirPad = myRole() === 0 ? POS.k : POS.K;
+      const theirPad = myRole() === 0 ? L.pos.k : L.pos.K;
       const padSolved = v.doors & (myRole() === 0 ? LOCK2 : LOCK1);
+      const winS = (L.keyWindowMs / 1000).toFixed(1).replace(/\.0$/, "");
       if (!padSolved && near(me.x, me.y, pad.x, pad.y, 1.5))
         ctx.fillText("type the 4 digits your partner reads out", pad.x, pad.y - 24);
       if (near(me.x, me.y, theirPad.x, theirPad.y, 1.5))
         ctx.fillText("your partner's keypad — read them your panel", theirPad.x, theirPad.y - 24);
-      if (!(v.doors & LATCH) && near(me.x, me.y, POS.S.x, POS.S.y, 1.5))
-        ctx.fillText("[E] lock the gate open", POS.S.x, POS.S.y - 20);
-      if (myRole() === 0 && near(me.x, me.y, POS.A.x, POS.A.y, 1.5))
-        ctx.fillText("[E] turn key A — together, within 2s", POS.A.x, POS.A.y - 24);
-      if (myRole() === 1 && near(me.x, me.y, POS.B.x, POS.B.y, 1.5))
-        ctx.fillText("[E] turn key B — together, within 2s", POS.B.x, POS.B.y - 24);
+      if (!(v.doors & LATCH) && near(me.x, me.y, L.pos.S.x, L.pos.S.y, 1.5))
+        ctx.fillText("[E] lock the gate open", L.pos.S.x, L.pos.S.y - 20);
+      if (myRole() === 0 && near(me.x, me.y, L.pos.A.x, L.pos.A.y, 1.5))
+        ctx.fillText(`[E] turn key A — together, within ${winS}s`, L.pos.A.x, L.pos.A.y - 24);
+      if (myRole() === 1 && near(me.x, me.y, L.pos.B.x, L.pos.B.y, 1.5))
+        ctx.fillText(`[E] turn key B — together, within ${winS}s`, L.pos.B.x, L.pos.B.y - 24);
 
-      for (const [key, p] of remotes.current) {
+      for (const [key, pp] of remotes.current) {
         if (key === selfKey) continue;
-        drawPlayer(ctx, key, p.data, { chat: chats.current.get(key) });
+        drawPlayer(ctx, key, pp.data, { chat: chats.current.get(key) });
       }
       drawPlayer(
         ctx,
@@ -440,24 +498,27 @@ export default function App() {
   };
 
   const room = roomRef.current;
+  const lvName = LEVELS[Math.min(level, LEVELS.length - 1)].name;
   const objective = !room
     ? ""
-    : online < 2 && !(doors & DOOR1) && !out
+    : online < 2 && !(doors & DOOR1) && level === 0 && !out
       ? "waiting for your partner — this vault needs two"
       : out
         ? "you escaped — verify it on the explorer"
-        : !(doors & DOOR1)
-          ? "① one of you on each glowing plate — at the same moment"
-          : !(doors & LOCK1) || !(doors & LOCK2)
-            ? "② read your green panel to your partner (Enter to chat) — type the code they read you on your yellow keypad (0-9)"
-            : !(doors & LATCH)
-              ? "③ one stands on the lever to hold the gate — the other walks through and presses E on the switch"
-              : `④ you are key ${myRole() === 0 ? "A (top)" : "B (bottom)"} — count down in chat, both press E within 2 seconds`;
+        : cleared
+          ? "level cleared — hit next level when you're both ready"
+          : !(doors & DOOR1)
+            ? "① one of you on each glowing plate — at the same moment"
+            : !(doors & LOCK1) || !(doors & LOCK2)
+              ? "② read your green panel to your partner (Enter to chat) — type the code they read you on your yellow keypad (0-9)"
+              : !(doors & LATCH)
+                ? "③ one stands on the lever to hold the gate — the other walks through and presses E on the switch"
+                : `④ you are key ${myRole() === 0 ? "A" : "B"} — count down in chat, both press E together`;
   const steps: [string, boolean][] = [
     ["plates", (doors & DOOR1) !== 0],
     ["codes", (doors & LOCK1) !== 0 && (doors & LOCK2) !== 0],
     ["gate", (doors & LATCH) !== 0],
-    ["keys", out],
+    ["keys", cleared || out],
   ];
 
   return (
@@ -474,6 +535,9 @@ export default function App() {
               copy invite link
             </button>
             <span>{online}/2 inside</span>
+            <span className="metric">
+              lvl {level + 1}/{LEVELS.length} · {lvName}
+            </span>
             {clock && <span className="metric">⏱ {clock}</span>}
             <span className="metric">{txCount} onchain writes</span>
             {echo !== null && <span className="metric">{echo}ms echo</span>}
@@ -495,10 +559,11 @@ export default function App() {
         <div className="panel">
           <p>
             <b>The Vault</b> — MagicBlock's co-op escape room idea, built on
-            solsocket. Four puzzles, each impossible alone: pressure plates you
-            both stand on, codes only your partner can read, a gate one of you
-            holds open, and two keys turned in the same two seconds. Every move
-            is a zero-fee onchain transaction on an ephemeral rollup
+            solsocket. {LEVELS.length} levels of puzzles that are impossible
+            alone: pressure plates you both stand on, codes only your partner
+            can read, a gate one of you holds open, and two keys turned in the
+            same shrinking window. Every move is a zero-fee onchain transaction
+            on an ephemeral rollup
             {cluster === "local" ? " (local stack)" : " (devnet)"}.
           </p>
           <p>
@@ -540,7 +605,7 @@ export default function App() {
 
       <div className="stage" style={{ display: phase === "live" ? "block" : "none" }}>
         <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
-        {phase === "live" && online < 2 && !(doors & DOOR1) && !out && (
+        {phase === "live" && online < 2 && level === 0 && !(doors & DOOR1) && !out && (
           <div className="hint">
             <b>waiting for your partner</b>
             <div>this vault needs two — send the invite link</div>
@@ -549,9 +614,9 @@ export default function App() {
             </button>
           </div>
         )}
-        {phase === "live" && online >= 2 && showHint && !out && (
+        {phase === "live" && online >= 2 && showHint && !out && !cleared && (
           <div className="hint" onClick={() => setShowHint(false)}>
-            <b>escape together</b>
+            <b>escape together — {LEVELS.length} levels</b>
             <div>
               <kbd>W</kbd>
               <kbd>A</kbd>
@@ -562,13 +627,28 @@ export default function App() {
             <div>1 — stand on both plates at the same time</div>
             <div>2 — read your panel aloud; type the code you're told</div>
             <div>3 — one holds the lever, one locks the gate</div>
-            <div>4 — turn both keys within two seconds</div>
+            <div>4 — turn both keys together (the window shrinks each level)</div>
             <span className="hint-note">every action is an onchain tx · move to dismiss</span>
+          </div>
+        )}
+        {cleared && (
+          <div className="win">
+            <b>
+              LEVEL {level + 1} CLEARED
+            </b>
+            <div className="win-time">{clock}</div>
+            <div>
+              next: {LEVELS[Math.min(level + 1, LEVELS.length - 1)].name} — key window{" "}
+              {(LEVELS[Math.min(level + 1, LEVELS.length - 1)].keyWindowMs / 1000).toFixed(1)}s
+            </div>
+            <button className="primary" onClick={advance}>
+              next level →
+            </button>
           </div>
         )}
         {out && (
           <div className="win">
-            <b>ESCAPED</b>
+            <b>ESCAPED — ALL {LEVELS.length} LEVELS</b>
             <div className="win-time">{clock}</div>
             <div>
               {txCount} onchain writes · every step a signed transaction
@@ -597,7 +677,7 @@ export default function App() {
             </button>
           </div>
         )}
-        {objective && !out && <div className="objective">{objective}</div>}
+        {objective && !out && !cleared && <div className="objective">{objective}</div>}
         <div className="steps">
           {steps.map(([label, done]) => (
             <span key={label} className={done ? "step done" : "step"}>
