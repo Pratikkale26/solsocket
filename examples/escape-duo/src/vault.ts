@@ -3,7 +3,10 @@ import { PublicKey } from "@solana/web3.js";
 /** Escape levels. Every layout is 28×12 and carries the same puzzle chars:
  *  `#` wall  `.` floor  `1` plate door  `2` code door  `3` held gate
  *  `4` vault door  `P`/`Q` pressure plates  `g`/`G` code panels  `k`/`K`
- *  keypads  `L` lever  `S` gate switch  `A`/`B` key stations */
+ *  keypads  `L` lever  `S` gate switch  `A`/`B` key stations
+ *  Terrain hazards (level flavor): `~` coolant — stepping on it resets you
+ *  to spawn; `m` pulse barrier — passable only while the pulse is open,
+ *  clocked off the run's onchain start timestamp so every client agrees. */
 export const TILE = 24;
 export const COLS = 28;
 export const ROWS = 12;
@@ -44,14 +47,14 @@ const DEFS: LevelDef[] = [
     layout: [
       "############################",
       "#....P.#..K...#.....#..B...#",
-      "#..##..#......#.##..#......#",
+      "#..##..#.~~...#.##..#......#",
       "#..#...#..G...#.....#..##..#",
       "#..#...1......2..L..3...#..#",
-      "#..##..1......2.....3...#..4",
+      "#..##..1.~~~..2.....3...#..4",
       "#...#..1......2.....3..##..4",
       "#...#..#..g...#.##..#......#",
-      "#...#..#......#.....#.S....#",
-      "#......#..k...#.....#......#",
+      "#...#..#.~~...#.....#.S....#",
+      "#......#..k...#..~..#......#",
       "#....Q.#......#.....#..A...#",
       "############################",
     ],
@@ -63,13 +66,13 @@ const DEFS: LevelDef[] = [
     layout: [
       "############################",
       "#P....##...k..#..L..#.A....#",
-      "#.....##......#.....#......#",
-      "#.##...#......#..#..#..#####",
+      "#.....##......#.....#.m.m..#",
+      "#.##...##mmmmm#..#..#..#####",
       "#......1..g...2..#..3......#",
       "#.###..1......2..#..3......4",
       "#...#..1......2.....3..###.4",
       "#......#..G...#.....#....#.#",
-      "#..##..#......#..#..#....#.#",
+      "#..##..#.~~...#..#..#....#.#",
       "#......#...K..#.....#.S..#.#",
       "#....Q.#......#.....#....B.#",
       "############################",
@@ -134,6 +137,13 @@ export const LATCH = 8; // gate switch hit — gate 3 stays open
 export const levelOf = (s: VaultState): Level =>
   LEVELS[Math.min(Math.max(s.level, 0), LEVELS.length - 1)];
 
+/** Pulse barriers (`m`) open and close on a fixed cycle anchored to the
+ *  run's onchain start timestamp — deterministic, so every client (and
+ *  every spectator) sees the same phase with no extra messages. */
+export const PULSE_MS = 1_700;
+export const pulseOpen = (runTs: number, now: number) =>
+  runTs === 0 || Math.floor((now - runTs) / PULSE_MS) % 2 === 0;
+
 /** Both keys turned inside this level's window? */
 export const solvedKeys = (s: VaultState) =>
   s.keyA > 0 && s.keyB > 0 && Math.abs(s.keyA - s.keyB) <= levelOf(s).keyWindowMs;
@@ -149,6 +159,7 @@ export function walkable(
   y: number,
   doors: number,
   leverHeld: boolean,
+  pulse = true,
   half = 8,
 ): boolean {
   for (const [dx, dy] of [
@@ -162,6 +173,8 @@ export function walkable(
     if (t === "1" && !(doors & DOOR1)) return false;
     if (t === "2" && !(doors & LOCK1 && doors & LOCK2)) return false;
     if (t === "3" && !(doors & LATCH) && !leverHeld) return false;
+    if (t === "m" && !pulse) return false;
+    // `~` is deliberately walkable — stepping on it is the mistake.
   }
   return true;
 }
@@ -197,6 +210,8 @@ export interface DrawOpts {
   keyA: number;
   keyB: number;
   keyWindowMs: number;
+  /** Are the `m` pulse barriers currently open? */
+  pulseOn: boolean;
 }
 
 const shade = (c: number, r: number) => (c * 7 + r * 13) % 3;
@@ -255,6 +270,35 @@ export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts)
             ctx.beginPath();
             ctx.arc(x + TILE / 2, y + TILE / 2, 7, 0, Math.PI * 2);
             ctx.stroke();
+          }
+          break;
+        }
+        case "~": {
+          // coolant — touch it and you're back at spawn
+          const glow = 38 + Math.sin(o.t / 260 + c * 1.1 + r * 0.7) * 8;
+          ctx.fillStyle = `hsl(14 85% ${glow}%)`;
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.fillStyle = "rgba(255,255,255,0.25)";
+          ctx.fillRect(x + 4, y + 10 + Math.sin(o.t / 300 + c) * 3, TILE - 8, 2);
+          break;
+        }
+        case "m": {
+          floor(x, y, v);
+          if (o.pulseOn) {
+            // open: just the emitter studs
+            ctx.fillStyle = "#22d3ee";
+            ctx.fillRect(x + TILE / 2 - 1.5, y, 3, 4);
+            ctx.fillRect(x + TILE / 2 - 1.5, y + TILE - 4, 3, 4);
+          } else {
+            // closed: an energy wall
+            ctx.fillStyle = "rgba(34,211,238,0.30)";
+            ctx.fillRect(x + 3, y, TILE - 6, TILE);
+            ctx.fillStyle = "rgba(165,243,252,0.7)";
+            const sweep = (o.t / 4) % TILE;
+            ctx.fillRect(x + 3, y + sweep, TILE - 6, 2);
+            ctx.fillStyle = "#22d3ee";
+            ctx.fillRect(x + TILE / 2 - 1.5, y, 3, 4);
+            ctx.fillRect(x + TILE / 2 - 1.5, y + TILE - 4, 3, 4);
           }
           break;
         }

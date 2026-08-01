@@ -30,8 +30,9 @@ const ok = (cond: boolean, msg: string) => {
   }
 };
 
-/** Tiles reachable from spawn walking with the given door bits / lever. */
-function reachable(lv: Level, doors: number, lever: boolean): Set<string> {
+/** Tiles reachable from spawn with the given door bits / lever / pulse —
+ *  refusing to step on coolant, so reachability proves a SAFE path. */
+function reachable(lv: Level, doors: number, lever: boolean, pulse = true): Set<string> {
   const seen = new Set<string>();
   const startC = Math.floor(lv.spawn.x / TILE);
   const startR = Math.floor(lv.spawn.y / TILE);
@@ -49,7 +50,9 @@ function reachable(lv: Level, doors: number, lever: boolean): Set<string> {
       const nr = r + dr;
       const key = `${nc},${nr}`;
       if (seen.has(key)) continue;
-      if (!walkable(lv, nc * TILE + TILE / 2, nr * TILE + TILE / 2, doors, lever)) continue;
+      if (lv.tile(nc, nr) === "~") continue; // never a required step
+      if (!walkable(lv, nc * TILE + TILE / 2, nr * TILE + TILE / 2, doors, lever, pulse))
+        continue;
       seen.add(key);
       queue.push([nc, nr]);
     }
@@ -108,6 +111,22 @@ for (const lv of LEVELS) {
   const dist = Math.hypot(lv.pos.A.x - lv.pos.B.x, lv.pos.A.y - lv.pos.B.y);
   ok(dist >= 7 * TILE, `${L} keys ${Math.round(dist)}px apart (≥7 tiles)`);
 }
+
+// ── level flavor mechanics ──
+const count = (lv: Level, ch: string) => {
+  let n = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++) if (lv.tile(c, r) === ch) n++;
+  return n;
+};
+ok(count(LEVELS[0], "~") === 0 && count(LEVELS[0], "m") === 0, "level 1 is hazard-free (the tutorial)");
+ok(count(LEVELS[1], "~") > 0, "level 2 has coolant hazards");
+ok(count(LEVELS[2], "m") > 0, "level 3 has pulse barriers");
+// The Core: the top keypad is genuinely gated by the pulse wall
+const coreClosed = reachable(LEVELS[2], DOOR1, false, false);
+const coreOpen = reachable(LEVELS[2], DOOR1, false, true);
+ok(!has(coreClosed, LEVELS[2], "k"), "[The Core] pulse wall closed → keypad k unreachable");
+ok(has(coreOpen, LEVELS[2], "k"), "[The Core] pulse open → keypad k reachable");
 
 ok(ROWS === 12 && COLS === 28, `all maps are ${COLS}x${ROWS}`);
 
