@@ -156,8 +156,9 @@ Built for [MagicBlock Solana Blitz v7](https://build.magicblock.app)
 (theme: Collaboration). Working now: everything above — including events,
 named rooms, discovery, and multi-region — covered by the program lifecycle
 suite plus a 16-test SDK e2e suite on the local MagicBlock stack, with the
-events path verified on devnet. Next: mainnet endpoints, docs site,
-program-side validation hooks for game rules.
+events path verified on devnet. Docs live in [`docs/`](docs/) (VitePress —
+`pnpm --filter docs docs:dev`). Next: mainnet endpoints, program-side
+validation hooks for game rules.
 
 ## License
 
