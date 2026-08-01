@@ -77,6 +77,7 @@ processed-commitment subscription wiring, before any game code.
 | [`program`](program) | `solsocket-engine` — Anchor program, devnet: [`CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh`](https://explorer.solana.com/address/CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh?cluster=devnet) |
 | [`examples/cursor-canvas`](examples/cursor-canvas) | Shared-cursor demo — the whole integration is ~15 lines |
 | [`examples/gather-lite`](examples/gather-lite) | A tiny Gather-style world: walking avatars, **proximity chat**, emotes, a shared door — every event an onchain transaction |
+| [`examples/escape-duo`](examples/escape-duo) | **The Vault** — a two-player escape room where all four puzzles are impossible alone: shared plates, code relay, a held gate, keys turned in the same 2s |
 
 ## Run it
 
@@ -90,6 +91,9 @@ pnpm --filter @solsocket/cursor-canvas dev
 
 # the flagship demo: a multiplayer world
 pnpm --filter @solsocket/gather-lite dev
+
+# the co-op escape room (grab a partner)
+pnpm --filter @solsocket/escape-duo dev
 
 # full local stack (base validator + ephemeral rollup)
 npm i -g @magicblock-labs/ephemeral-validator
