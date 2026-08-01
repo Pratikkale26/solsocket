@@ -24,10 +24,12 @@ import {
   isFinal,
   levelOf,
   near,
+  pulseOpen,
   solvedKeys,
   tileUnder,
   walkable,
 } from "./vault";
+import { isMuted, setMuted, sfx } from "./sound";
 import { loadBurnerWallet, requestAirdrop } from "./wallet";
 
 const wallet = loadBurnerWallet();
@@ -118,6 +120,7 @@ export default function App() {
   const [showHint, setShowHint] = useState(true);
   const [board, setBoard] = useState<{ addr: string; time: number }[]>([]);
   const [live, setLive] = useState<RoomListing[]>([]);
+  const [mute, setMute] = useState(isMuted());
 
   const roomRef = useRef<Vault | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -129,6 +132,8 @@ export default function App() {
   const myKeyAt = useRef(0);
   const sent = useRef(0);
   const sentAt = useRef(0);
+  const flash = useRef<{ until: number } | null>(null);
+  const sndPrev = useRef({ doors: 0, cleared: false, out: false, keyA: 0, keyB: 0 });
 
   const selfKey = wallet.publicKey.toBase58();
   const roleRef = useRef(0);
@@ -187,8 +192,26 @@ export default function App() {
     setDoors(v.doors);
     setLevel(v.level);
     const solved = solvedKeys(v);
-    setOut(solved && isFinal(v));
-    setCleared(solved && !isFinal(v));
+    const nowOut = solved && isFinal(v);
+    const nowCleared = solved && !isFinal(v);
+    setOut(nowOut);
+    setCleared(nowCleared);
+    // sound triggers: fire once per state transition, whoever caused it
+    const p = sndPrev.current;
+    if (v.doors & DOOR1 && !(p.doors & DOOR1)) sfx.door();
+    if (v.doors & LOCK1 && !(p.doors & LOCK1)) sfx.door();
+    if (v.doors & LOCK2 && !(p.doors & LOCK2)) sfx.door();
+    if (v.doors & LATCH && !(p.doors & LATCH)) sfx.latch();
+    if ((v.keyA && v.keyA !== p.keyA) || (v.keyB && v.keyB !== p.keyB)) sfx.turn();
+    if (nowCleared && !p.cleared) sfx.clear();
+    if (nowOut && !p.out) sfx.escape();
+    sndPrev.current = {
+      doors: v.doors,
+      cleared: nowCleared,
+      out: nowOut,
+      keyA: v.keyA,
+      keyB: v.keyB,
+    };
   };
 
   /** Send the vault state, retrying through transient ER failures — a
@@ -272,6 +295,7 @@ export default function App() {
       const first = await room.getState();
       if (first) applyState(first.state);
       room.onMessage("chat", ({ player, data }) => {
+        if (player.toBase58() !== selfKey) sfx.chat();
         chats.current.set(player.toBase58(), {
           text: (data as ChatMsg).text,
           until: Date.now() + 5_000,
@@ -303,6 +327,7 @@ export default function App() {
     let lastSend = 0;
     let lastMoved = 0;
     let lastLatch = 0;
+    let lastTile = "";
     let raf = 0;
     let last = performance.now();
 
@@ -339,6 +364,7 @@ export default function App() {
       if (buf.current === want) {
         writeState({ doors: vault.current.doors | (myRole() === 0 ? LOCK2 : LOCK1) });
       } else {
+        sfx.wrong();
         chats.current.set(selfKey, { text: "✗ wrong code", until: Date.now() + 1_500 });
       }
       buf.current = "";
@@ -363,6 +389,7 @@ export default function App() {
         const pad = myPad();
         const theirs = myRole() === 0 ? lv().pos.k : lv().pos.K;
         if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
+          sfx.key();
           enterDigit(e.key);
         } else if (near(me.x, me.y, theirs.x, theirs.y, 1.6)) {
           chats.current.set(selfKey, {
@@ -405,6 +432,14 @@ export default function App() {
           ),
         );
       if (Date.now() - lastSend > 2_500) broadcast(true);
+      // countdown tick while your key is turned and the window is open
+      if (
+        !watchMode &&
+        myKeyAt.current > 0 &&
+        Date.now() - myKeyAt.current < levelOf(vault.current).keyWindowMs &&
+        !solvedKeys(vault.current)
+      )
+        sfx.tick();
     }, 300);
 
     const frame = (now: number) => {
@@ -428,7 +463,22 @@ export default function App() {
         : [];
       const p = partner();
       const pTile = watchMode ? (tiles[1] ?? "") : p ? tileUnder(L, p.data.x, p.data.y) : "";
-      const myTile = watchMode ? (tiles[0] ?? "") : tileUnder(L, me.x, me.y);
+      let myTile = watchMode ? (tiles[0] ?? "") : tileUnder(L, me.x, me.y);
+      const pulse = pulseOpen(v.run, Date.now());
+
+      // Coolant (`~`): touch it and you're back at spawn.
+      if (!watchMode && myTile === "~" && !solvedKeys(v)) {
+        me.x = L.spawn.x;
+        me.y = L.spawn.y;
+        myTile = tileUnder(L, me.x, me.y);
+        flash.current = { until: Date.now() + 350 };
+        sfx.hazard();
+        broadcast(true);
+      }
+      if (!watchMode && (myTile === "P" || myTile === "Q") && lastTile !== myTile)
+        sfx.plate();
+      lastTile = myTile;
+
       const leverHeld = myTile === "L" || pTile === "L";
       const frozen = solvedKeys(v);
 
@@ -444,8 +494,8 @@ export default function App() {
           const len = Math.hypot(vx, vy);
           const nx = me.x + (vx / len) * speed * dt;
           const ny = me.y + (vy / len) * speed * dt;
-          if (walkable(L, nx, me.y, v.doors, leverHeld)) me.x = nx;
-          if (walkable(L, me.x, ny, v.doors, leverHeld)) me.y = ny;
+          if (walkable(L, nx, me.y, v.doors, leverHeld, pulse)) me.x = nx;
+          if (walkable(L, me.x, ny, v.doors, leverHeld, pulse)) me.y = ny;
           me.facing = vy < 0 ? 3 : vx < 0 ? 1 : vx > 0 ? 2 : 0;
           lastMoved = Date.now();
         }
@@ -485,6 +535,7 @@ export default function App() {
         keyA: v.keyA,
         keyB: v.keyB,
         keyWindowMs: L.keyWindowMs,
+        pulseOn: pulse,
       });
 
       // contextual prompts
@@ -517,6 +568,13 @@ export default function App() {
           { x: me.x, y: me.y, facing: me.facing, name },
           { self: true, chat: chats.current.get(selfKey) },
         );
+
+      // hazard hit: red flash fading out
+      if (flash.current && flash.current.until > Date.now()) {
+        const a = ((flash.current.until - Date.now()) / 350) * 0.35;
+        ctx.fillStyle = `rgba(248,113,113,${a.toFixed(3)})`;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      }
 
       raf = requestAnimationFrame(frame);
     };
@@ -612,6 +670,14 @@ export default function App() {
             <span className="metric">{txCount} onchain writes</span>
             {echo !== null && <span className="metric">{echo}ms echo</span>}
             <button onClick={() => setShowHint(true)}>how to play</button>
+            <button
+              onClick={() => {
+                setMuted(!mute);
+                setMute(!mute);
+              }}
+            >
+              {mute ? "🔇" : "🔊"}
+            </button>
             {cluster === "devnet" && (
               <a
                 href={`https://explorer.solana.com/address/${room.address.toBase58()}?cluster=devnet`}
@@ -745,6 +811,8 @@ export default function App() {
             <div>2 — read your panel aloud; type the code you're told</div>
             <div>3 — one holds the lever, one locks the gate</div>
             <div>4 — turn both keys together (the window shrinks each level)</div>
+            <div>⚠ later levels: orange coolant sends you back to spawn,</div>
+            <div>cyan pulse walls only open on the beat — time your runs</div>
             <span className="hint-note">every action is an onchain tx · move to dismiss</span>
           </div>
         )}
