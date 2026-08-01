@@ -112,20 +112,14 @@ export default function App() {
   const sentAt = useRef(0);
 
   const selfKey = wallet.publicKey.toBase58();
-  const partnerRef = useRef<string | null>(null);
+  const roleRef = useRef(0);
 
-  /** Sticky: once a partner is seen, keep them even through a stale patch —
-   *  roles must never flip mid-game. */
-  const partnerKey = () => {
-    const live = [...remotes.current.keys()].find((k) => k !== selfKey);
-    if (live) partnerRef.current = live;
-    return partnerRef.current;
-  };
-  /** Deterministic roles: the lexicographically smaller wallet is role 0. */
-  const myRole = () => {
-    const p = partnerKey();
-    return p && selfKey > p ? 1 : 0;
-  };
+  const partnerKey = () =>
+    [...remotes.current.keys()].find((k) => k !== selfKey) ?? null;
+  /** Structural roles, stamped per room: the creator is 0 (key A), the
+   *  joiner is 1 (key B). Stored so a refresh can't flip it — and the two
+   *  clients can never disagree. */
+  const myRole = () => roleRef.current;
 
   const refreshBalance = useCallback(async () => {
     const sock = SolSocket.connect({ wallet, cluster });
@@ -170,6 +164,10 @@ export default function App() {
     try {
       const room = await goLive();
       roomRef.current = room;
+      const roleKey = `solsocket-escape:role:${room.address.toBase58()}`;
+      const stored = localStorage.getItem(roleKey);
+      roleRef.current = stored !== null ? Number(stored) : joinTarget ? 1 : 0;
+      localStorage.setItem(roleKey, String(roleRef.current));
       room.onStateChange(({ state }) => applyState(state));
       const first = await room.getState();
       if (first) applyState(first.state);
