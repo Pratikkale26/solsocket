@@ -1,3 +1,4 @@
+import { utils } from "@coral-xyz/anchor";
 import {
   Commitment,
   Connection,
@@ -94,9 +95,24 @@ export async function sendInstructions(opts: SendOptions): Promise<string> {
   if (wallet && !isKeypair(wallet)) tx = await wallet.signTransaction(tx);
   if (signers.length > 0) tx.partialSign(...signers);
 
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: true,
-  });
+  let signature: string;
+  try {
+    signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: true,
+    });
+  } catch (err) {
+    // A byte-identical resend (same payload, same cached blockhash — e.g. an
+    // idle presence heartbeat) is rejected as a duplicate. The first copy
+    // landed, so this IS success — surface it as such.
+    if (
+      err instanceof Error &&
+      err.message.includes("already been processed") &&
+      tx.signature
+    ) {
+      return utils.bytes.bs58.encode(tx.signature);
+    }
+    throw err;
+  }
   if (!fireAndForget) {
     const conf = await connection.confirmTransaction(
       { signature, blockhash, lastValidBlockHeight },
