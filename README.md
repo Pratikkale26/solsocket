@@ -73,7 +73,7 @@ processed-commitment subscription wiring, before any game code.
 | Path | What |
 |---|---|
 | [`packages/sdk`](packages/sdk) | [`solsocket`](https://www.npmjs.com/package/solsocket) — the TypeScript SDK (web3.js, dual CJS/ESM) |
-| [`packages/create-solsocket`](packages/create-solsocket) | [`create-solsocket`](https://www.npmjs.com/package/create-solsocket) — `npm create solsocket` scaffolder |
+| [`packages/create-solsocket`](packages/create-solsocket) | [`create-solsocket`](https://www.npmjs.com/package/create-solsocket) — `npm create solsocket` scaffolder; add `--template gather` for a walkable world |
 | [`program`](program) | `solsocket-engine` — Anchor program, devnet: [`CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh`](https://explorer.solana.com/address/CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh?cluster=devnet) |
 | [`examples/cursor-canvas`](examples/cursor-canvas) | Shared-cursor demo — the whole integration is ~15 lines |
 | [`examples/gather-lite`](examples/gather-lite) | A tiny Gather-style world: walking avatars, **proximity chat**, emotes, a shared door — every event an onchain transaction |
