@@ -13,7 +13,7 @@ import {
   PROGRAM_ID,
   roomPda,
 } from "./engine";
-import { Room } from "./room";
+import { Room, StateUpdate } from "./room";
 import {
   isKeypair,
   sendInstructions,
@@ -171,6 +171,70 @@ export class SolSocket {
         };
       })
       .sort((a, b) => b.players - a.players || b.seq - a.seq);
+  }
+
+  /**
+   * Read any room's shared state without joining it — no transaction, no
+   * membership. Live rooms are read from the ER; rooms already committed
+   * back to the base layer fall through to it. Returns null if the address
+   * holds no (decodable) room. Powers leaderboards and lobby previews:
+   *
+   *   const s = await sock.peekState<Score>(listing.address, scoreCodec);
+   */
+  async peekState<T = unknown>(
+    roomAddress: PublicKey | string,
+    codec: Codec<T> = jsonCodec<T>(),
+  ): Promise<StateUpdate<T> | null> {
+    const room = new PublicKey(roomAddress);
+    const info =
+      (await this.er.getAccountInfo(room, "processed").catch(() => null)) ??
+      (await this.base.getAccountInfo(room));
+    if (!info) return null;
+    try {
+      const decoded = decodeRoom(this.program, info.data);
+      return {
+        state: codec.decode(Uint8Array.from(decoded.state)),
+        seq: decoded.seq.toNumber(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Watch a room without joining it: a read-only Room wired to the same
+   * realtime subscriptions (state, presence, messages) but with NO join
+   * transaction — no fees, no rent, the wallet never needs funding. Write
+   * methods (`broadcast`/`emit`/`setState`) will be rejected on-chain since
+   * a spectator holds no presence slot.
+   *
+   *   const room = await sock.spectate(address);
+   *   room.onPresence(({ player, data }) => draw(player, data));
+   */
+  async spectate<T = unknown, P = T, M = unknown>(
+    roomAddress: PublicKey | string,
+    opts: JoinRoomOptions<T, P, M> = {},
+  ): Promise<Room<T, P, M>> {
+    const codec = opts.codec ?? jsonCodec<T>();
+    const room = new PublicKey(roomAddress);
+    const info =
+      (await this.er.getAccountInfo(room, "processed").catch(() => null)) ??
+      (await this.base.getAccountInfo(room));
+    if (!info) {
+      throw new Error(
+        `no room exists at ${room.toBase58()} on this cluster ` +
+          `(base: ${this.cluster.baseRpc}) — check the address, and that you ` +
+          `connected with the same cluster the room was created on`,
+      );
+    }
+    return new Room<T, P, M>(
+      room,
+      presencePda(room, this.walletPubkey),
+      this.roomContext(),
+      codec,
+      opts.messageCodec,
+      opts.presenceCodec,
+    );
   }
 
   /**
