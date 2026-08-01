@@ -52,6 +52,40 @@ importers:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@24.13.3)
 
+  examples/escape-duo:
+    dependencies:
+      '@solana/web3.js':
+        specifier: ^1.98.0
+        version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      solsocket:
+        specifier: workspace:*
+        version: link:../../packages/sdk
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.31
+      '@types/react-dom':
+        specifier: ^18.3.1
+        version: 18.3.7(@types/react@18.3.31)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(supports-color@8.1.1)(vite@6.4.3(@types/node@24.13.3))
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.3(@types/node@24.13.3)
+
   examples/gather-lite:
     dependencies:
       '@solana/web3.js':
