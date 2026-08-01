@@ -107,7 +107,6 @@ export default function App() {
   const vault = useRef<VaultState>({ ...FRESH_VAULT });
   const buf = useRef("");
   const myKeyAt = useRef(0);
-  const latching = useRef(false);
   const sent = useRef(0);
   const sentAt = useRef(0);
 
@@ -132,19 +131,28 @@ export default function App() {
     void refreshBalance();
   }, [refreshBalance]);
 
+  /** Send the vault state, retrying through transient ER failures — a
+   *  silently dropped write would leave the two players in different
+   *  realities, which is worse than a late one. */
+  const pushState = (tries = 5) => {
+    sent.current += 1;
+    roomRef.current?.setState({ ...vault.current }).catch(() => {
+      if (tries > 1) setTimeout(() => pushState(tries - 1), 1_500);
+    });
+  };
+
   /** Every state write merges over the latest known state — and updates the
    *  local mirror optimistically so the UI never waits on the round trip. */
   const writeState = (patch: Partial<VaultState>) => {
-    const next = { ...vault.current, ...patch };
-    vault.current = next;
-    setDoors(next.doors);
-    sent.current += 1;
-    void roomRef.current?.setState(next);
+    vault.current = { ...vault.current, ...patch };
+    setDoors(vault.current.doors);
+    pushState();
   };
 
   const applyState = (s: VaultState) => {
     // Never let a stale/raced write regress local progress bits...
     const doorsMerged = s.doors | vault.current.doors;
+    const chainMissedBits = doorsMerged !== s.doors;
     vault.current = { ...s, doors: doorsMerged };
     // ...and if a race wiped our own key-turn, restore it.
     if (myKeyAt.current > 0 && Date.now() - myKeyAt.current < 10_000) {
@@ -154,6 +162,9 @@ export default function App() {
         return;
       }
     }
+    // If the chain lost progress bits we hold (a raced overwrite), write the
+    // merged truth back so both clients reconverge.
+    if (chainMissedBits) pushState();
     setDoors(doorsMerged);
     if (escaped(vault.current)) setOut(true);
   };
@@ -201,6 +212,7 @@ export default function App() {
     const me = { x: SPAWN.x, y: SPAWN.y, facing: 0 };
     let lastSend = 0;
     let lastMoved = 0;
+    let lastLatch = 0;
     let raf = 0;
     let last = performance.now();
 
@@ -251,8 +263,13 @@ export default function App() {
       }
       if (typing()) return;
       setShowHint(false);
-      keys.add(e.key.toLowerCase());
+      // Physical key codes: immune to layout, CapsLock, and IME surprises.
+      keys.add(e.code);
 
+      if (e.key === "Backspace") {
+        buf.current = "";
+        return;
+      }
       if (/^[0-9]$/.test(e.key)) {
         const pad = myPad();
         const theirs = myRole() === 0 ? POS.k : POS.K;
@@ -266,7 +283,7 @@ export default function App() {
         }
         return;
       }
-      if (e.key.toLowerCase() !== "e") return;
+      if (e.code !== "KeyE") return;
       const d = vault.current.doors;
       if (near(me.x, me.y, POS.S.x, POS.S.y, 1.3) && !(d & LATCH)) {
         writeState({ doors: d | LATCH });
@@ -278,9 +295,13 @@ export default function App() {
         writeState({ keyB: myKeyAt.current });
       }
     };
-    const onKeyUp = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
+    const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
+    // Alt-tabbing away eats keyup events — clear held keys so nobody walks
+    // into a wall forever.
+    const onBlur = () => keys.clear();
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
 
     const counters = setInterval(() => {
       setTxCount(sent.current);
@@ -305,10 +326,10 @@ export default function App() {
         const speed = 130;
         let vx = 0;
         let vy = 0;
-        if (keys.has("arrowleft") || keys.has("a")) vx -= 1;
-        if (keys.has("arrowright") || keys.has("d")) vx += 1;
-        if (keys.has("arrowup") || keys.has("w")) vy -= 1;
-        if (keys.has("arrowdown") || keys.has("s")) vy += 1;
+        if (keys.has("ArrowLeft") || keys.has("KeyA")) vx -= 1;
+        if (keys.has("ArrowRight") || keys.has("KeyD")) vx += 1;
+        if (keys.has("ArrowUp") || keys.has("KeyW")) vy -= 1;
+        if (keys.has("ArrowDown") || keys.has("KeyS")) vy += 1;
         if (vx || vy) {
           const len = Math.hypot(vx, vy);
           const nx = me.x + (vx / len) * speed * dt;
@@ -321,15 +342,20 @@ export default function App() {
         if (Date.now() - lastMoved < 200) broadcast();
       }
 
-      // Puzzle 1: door 1 latches open the instant both plates are pressed.
+      // Puzzle 1: door 1 latches open while both plates are pressed. Keep
+      // re-firing on a cooldown until the state sticks — a single dropped
+      // write must never dead-lock the vault.
       if (
         !(v.doors & DOOR1) &&
-        !latching.current &&
+        Date.now() - lastLatch > 1_500 &&
         ((myTile === "P" && pTile === "Q") || (myTile === "Q" && pTile === "P"))
       ) {
-        latching.current = true;
-        writeState({ doors: v.doors | DOOR1, start: Date.now() });
+        lastLatch = Date.now();
+        writeState({ doors: v.doors | DOOR1, start: v.start || Date.now() });
       }
+
+      // A half-typed code shouldn't linger: walking away clears the keypad.
+      if (buf.current && !near(me.x, me.y, myPad().x, myPad().y, 1.6)) buf.current = "";
 
       drawVault(ctx, {
         t: now,
@@ -382,6 +408,7 @@ export default function App() {
       clearInterval(counters);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, name]);
@@ -415,7 +442,7 @@ export default function App() {
   const room = roomRef.current;
   const objective = !room
     ? ""
-    : online < 2 && !out
+    : online < 2 && !(doors & DOOR1) && !out
       ? "waiting for your partner — this vault needs two"
       : out
         ? "you escaped — verify it on the explorer"
@@ -513,7 +540,7 @@ export default function App() {
 
       <div className="stage" style={{ display: phase === "live" ? "block" : "none" }}>
         <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
-        {phase === "live" && online < 2 && !out && (
+        {phase === "live" && online < 2 && !(doors & DOOR1) && !out && (
           <div className="hint">
             <b>waiting for your partner</b>
             <div>this vault needs two — send the invite link</div>
