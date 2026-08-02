@@ -8,6 +8,7 @@ export default defineConfig({
     ["link", { rel: "icon", type: "image/svg+xml", href: "/logo.svg" }],
   ],
   themeConfig: {
+    logo: "/logo.svg",
     nav: [
       { text: "Guide", link: "/guide/quickstart" },
       { text: "API", link: "/reference/api" },

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/public/logo.svg" width="88" alt="solsocket" />
+</p>
+
 # solsocket
 
 **Socket.io for Solana.** Realtime multiplayer rooms — fully onchain, powered by

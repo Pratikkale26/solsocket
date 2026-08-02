@@ -5,6 +5,9 @@ hero:
   name: solsocket
   text: Socket.io for Solana
   tagline: Realtime multiplayer rooms — fully onchain, powered by MagicBlock Ephemeral Rollups. ~50ms writes, zero fees, one wallet signature.
+  image:
+    src: /logo.svg
+    alt: solsocket
   actions:
     - theme: brand
       text: Quickstart
