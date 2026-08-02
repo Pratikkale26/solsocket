@@ -17,7 +17,7 @@ import {
 import { readFileSync } from "node:fs";
 import { Room, SolSocket, structCodec } from "solsocket";
 
-type Player = { x: number; y: number; facing: number; name: string };
+type Player = { x: number; y: number; facing: number; carry: number; name: string };
 type VaultState = {
   level: number;
   doors: number;
@@ -32,6 +32,7 @@ const playerCodec = structCodec<Player>([
   ["x", "u16"],
   ["y", "u16"],
   ["facing", "u8"],
+  ["carry", "u8"],
   ["name", "string"],
 ]);
 const vaultCodec = structCodec<VaultState>([
@@ -189,8 +190,8 @@ async function main() {
   // Like the app: keep broadcasting (10Hz loop + heartbeat) — a one-shot
   // send can race the peer's subscription coming up.
   const beat = setInterval(() => {
-    void roomA.broadcast({ x: 84, y: 60, facing: 0, name: "tester-A" });
-    void roomB.broadcast({ x: 84, y: 204, facing: 0, name: "tester-B" });
+    void roomA.broadcast({ x: 84, y: 60, facing: 0, carry: 0, name: "tester-A" });
+    void roomB.broadcast({ x: 84, y: 204, facing: 0, carry: 0, name: "tester-B" });
   }, 500);
   const [la, lb] = await Promise.all([
     Promise.race([bSawA, sleep(10_000).then(() => -1)]),

@@ -10,15 +10,18 @@ import {
 } from "solsocket";
 import {
   Bubble,
+  CHARGE_MS,
   DOOR1,
   LATCH,
   LEVELS,
   LOCK1,
   LOCK2,
   HEIGHT,
+  VALVE_WINDOW_MS,
   VaultState,
   WIDTH,
   codesFor,
+  deadlyTile,
   drawPlayer,
   drawVault,
   isFinal,
@@ -39,7 +42,7 @@ const REGIONS = ["asia", "eu", "us"] as const;
 const region =
   cluster === "devnet" ? REGIONS.find((r) => r === params.get("region")) : undefined;
 
-type Player = { x: number; y: number; facing: number; name: string };
+type Player = { x: number; y: number; facing: number; carry: number; name: string };
 type ChatMsg = { text: string };
 type Vault = Room<VaultState, Player, ChatMsg>;
 
@@ -56,6 +59,7 @@ const playerCodec = structCodec<Player>([
   ["x", "u16"],
   ["y", "u16"],
   ["facing", "u8"],
+  ["carry", "u8"],
   ["name", "string"],
 ]);
 const vaultCodec = structCodec<VaultState>([
@@ -133,6 +137,9 @@ export default function App() {
   const sent = useRef(0);
   const sentAt = useRef(0);
   const flash = useRef<{ until: number } | null>(null);
+  const carryRef = useRef(false); // fuel mech: holding my cell right now
+  const valveRef = useRef({ half: 0, at: 0 }); // valves mech: pair 1 latched?
+  const chargeRef = useRef({ start: 0, lastBoth: 0 }); // charge mech: hold timer
   const sndPrev = useRef({ doors: 0, cleared: false, out: false, keyA: 0, keyB: 0 });
 
   const selfKey = wallet.publicKey.toBase58();
@@ -350,6 +357,7 @@ export default function App() {
         x: Math.round(me.x),
         y: Math.round(me.y),
         facing: me.facing,
+        carry: carryRef.current ? 1 : 0,
         name,
       });
     };
@@ -386,6 +394,7 @@ export default function App() {
         return;
       }
       if (/^[0-9]$/.test(e.key)) {
+        if (lv().mech.locks !== "codes") return;
         const pad = myPad();
         const theirs = myRole() === 0 ? lv().pos.k : lv().pos.K;
         if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
@@ -401,8 +410,45 @@ export default function App() {
       }
       if (e.code !== "KeyE") return;
       const L = lv();
+      const mech = L.mech;
       const d = vault.current.doors;
-      if (near(me.x, me.y, L.pos.S.x, L.pos.S.y, 1.3) && !(d & LATCH)) {
+      // stage 2: the fuel run — grab your cell, slot it into your socket
+      if (mech.locks === "fuel") {
+        const mine = myRole() === 0;
+        const cradle = mine ? L.pos.u : L.pos.U;
+        const socket = mine ? L.pos.o : L.pos.O;
+        const bit = mine ? LOCK2 : LOCK1;
+        if (!carryRef.current && !(d & bit) && near(me.x, me.y, cradle.x, cradle.y, 1.4)) {
+          carryRef.current = true;
+          sfx.key();
+          broadcast(true);
+          return;
+        }
+        if (carryRef.current && near(me.x, me.y, socket.x, socket.y, 1.4)) {
+          carryRef.current = false;
+          sfx.latch();
+          broadcast(true);
+          writeState({ doors: d | bit });
+          return;
+        }
+      }
+      // stage 2: the breakers behind each other's lever gates
+      if (mech.locks === "levers") {
+        if (!(d & LOCK2) && near(me.x, me.y, L.pos.a.x, L.pos.a.y, 1.3)) {
+          writeState({ doors: d | LOCK2 });
+          return;
+        }
+        if (!(d & LOCK1) && near(me.x, me.y, L.pos.b.x, L.pos.b.y, 1.3)) {
+          writeState({ doors: d | LOCK1 });
+          return;
+        }
+      }
+      // stage 3 switch (the gate latch / the vent purge share the S char)
+      if (
+        mech.latch !== "charge" &&
+        near(me.x, me.y, L.pos.S.x, L.pos.S.y, 1.3) &&
+        !(d & LATCH)
+      ) {
         writeState({ doors: d | LATCH });
       } else if (myRole() === 0 && near(me.x, me.y, L.pos.A.x, L.pos.A.y, 1.3)) {
         myKeyAt.current = Date.now();
@@ -454,36 +500,45 @@ export default function App() {
         me.x = L.spawn.x;
         me.y = L.spawn.y;
         buf.current = "";
+        carryRef.current = false;
+        valveRef.current = { half: 0, at: 0 };
+        chargeRef.current = { start: 0, lastBoth: 0 };
         broadcast(true);
       }
 
-      // Spectators have no avatar: judge the lever purely from the players.
-      const tiles = watchMode
-        ? [...remotes.current.values()].map((e) => tileUnder(L, e.data.x, e.data.y))
-        : [];
+      // Spectators have no avatar: judge everything purely from the players.
+      const watchEntries = watchMode ? [...remotes.current.values()] : [];
+      const tiles = watchEntries.map((e) => tileUnder(L, e.data.x, e.data.y));
       const p = partner();
       const pTile = watchMode ? (tiles[1] ?? "") : p ? tileUnder(L, p.data.x, p.data.y) : "";
       let myTile = watchMode ? (tiles[0] ?? "") : tileUnder(L, me.x, me.y);
       const pulse = pulseOpen(v.run, Date.now());
+      const mech = L.mech;
 
-      // Coolant (`~`): touch it and you're back at spawn.
-      if (!watchMode && myTile === "~" && !solvedKeys(v)) {
+      // Hazards: coolant, cracked glass, and the vent stream (deadly unless
+      // your partner is freezing it from the vent plate — or it's purged).
+      const ventSafe = (v.doors & LATCH) !== 0 || pTile === "V";
+      if (!watchMode && !solvedKeys(v) && deadlyTile(myTile, ventSafe)) {
         me.x = L.spawn.x;
         me.y = L.spawn.y;
         myTile = tileUnder(L, me.x, me.y);
+        carryRef.current = false; // the cell doesn't survive the trip
         flash.current = { until: Date.now() + 350 };
         sfx.hazard();
         broadcast(true);
       }
-      if (!watchMode && (myTile === "P" || myTile === "Q") && lastTile !== myTile)
-        sfx.plate();
+      if (!watchMode && "PQcdefVhH".includes(myTile) && lastTile !== myTile) sfx.plate();
       lastTile = myTile;
 
-      const leverHeld = myTile === "L" || pTile === "L";
+      const held = {
+        lever: mech.latch === "gate" && (myTile === "L" || pTile === "L"),
+        i: mech.locks === "levers" && (myTile === "i" || pTile === "i"),
+        j: mech.locks === "levers" && (myTile === "j" || pTile === "j"),
+      };
       const frozen = solvedKeys(v);
 
       if (!typing() && !frozen && !watchMode) {
-        const speed = 130;
+        const speed = carryRef.current ? 95 : 130; // the cell is heavy
         let vx = 0;
         let vy = 0;
         if (keys.has("ArrowLeft") || keys.has("KeyA")) vx -= 1;
@@ -494,33 +549,76 @@ export default function App() {
           const len = Math.hypot(vx, vy);
           const nx = me.x + (vx / len) * speed * dt;
           const ny = me.y + (vy / len) * speed * dt;
-          if (walkable(L, nx, me.y, v.doors, leverHeld, pulse)) me.x = nx;
-          if (walkable(L, me.x, ny, v.doors, leverHeld, pulse)) me.y = ny;
+          if (walkable(L, nx, me.y, v.doors, held, pulse)) me.x = nx;
+          if (walkable(L, me.x, ny, v.doors, held, pulse)) me.y = ny;
           me.facing = vy < 0 ? 3 : vx < 0 ? 1 : vx > 0 ? 2 : 0;
           lastMoved = Date.now();
         }
         if (Date.now() - lastMoved < 200) broadcast();
       }
 
-      // Puzzle 1: door 1 latches open while both plates are pressed. Keep
-      // re-firing on a cooldown until the state sticks — a single dropped
-      // write must never dead-lock the vault.
-      if (
-        !watchMode &&
-        !(v.doors & DOOR1) &&
-        Date.now() - lastLatch > 1_500 &&
-        ((myTile === "P" && pTile === "Q") || (myTile === "Q" && pTile === "P"))
-      ) {
-        lastLatch = Date.now();
-        writeState({
-          doors: v.doors | DOOR1,
-          start: v.start || Date.now(),
-          run: v.run || Date.now(),
-        });
+      // Stage 1. Keep re-firing writes on a cooldown until the state sticks —
+      // a single dropped write must never dead-lock the vault.
+      const vr = valveRef.current;
+      if (!(v.doors & DOOR1)) {
+        if (mech.door1 === "valves") {
+          // valves 1+2 together, then 3+4 inside the window
+          const pair1 = (myTile === "c" && pTile === "d") || (myTile === "d" && pTile === "c");
+          const pair2 = (myTile === "e" && pTile === "f") || (myTile === "f" && pTile === "e");
+          if (vr.half === 1 && Date.now() - vr.at > VALVE_WINDOW_MS) {
+            vr.half = 0;
+            sfx.wrong();
+          }
+          if (vr.half === 0 && pair1) {
+            vr.half = 1;
+            vr.at = Date.now();
+            sfx.plate();
+          } else if (vr.half === 1 && pair2 && !watchMode && Date.now() - lastLatch > 1_500) {
+            lastLatch = Date.now();
+            writeState({
+              doors: v.doors | DOOR1,
+              start: v.start || Date.now(),
+              run: v.run || Date.now(),
+            });
+          }
+        } else if (
+          // plates / bridge buttons: both pressed at the same moment
+          !watchMode &&
+          Date.now() - lastLatch > 1_500 &&
+          ((myTile === "P" && pTile === "Q") || (myTile === "Q" && pTile === "P"))
+        ) {
+          lastLatch = Date.now();
+          writeState({
+            doors: v.doors | DOOR1,
+            start: v.start || Date.now(),
+            run: v.run || Date.now(),
+          });
+        }
+      }
+
+      // Stage 3 (The Core): hold both charge pads together, with a little
+      // grace so a presence hiccup doesn't zero the timer.
+      const cr = chargeRef.current;
+      let chargeFrac = 0;
+      if (mech.latch === "charge" && !(v.doors & LATCH)) {
+        const both = (myTile === "h" && pTile === "H") || (myTile === "H" && pTile === "h");
+        const nowMs = Date.now();
+        if (both) {
+          if (!cr.start) cr.start = nowMs;
+          cr.lastBoth = nowMs;
+        } else if (cr.start && nowMs - cr.lastBoth > 500) {
+          cr.start = 0;
+        }
+        if (cr.start) chargeFrac = Math.min(1, (nowMs - cr.start) / CHARGE_MS);
+        if (!watchMode && cr.start && nowMs - cr.start >= CHARGE_MS && nowMs - lastLatch > 1_500) {
+          lastLatch = nowMs;
+          writeState({ doors: v.doors | LATCH });
+        }
       }
 
       // A half-typed code shouldn't linger: walking away clears the keypad.
-      if (buf.current && !near(me.x, me.y, myPad().x, myPad().y, 1.6)) buf.current = "";
+      if (mech.locks === "codes" && buf.current && !near(me.x, me.y, myPad().x, myPad().y, 1.6))
+        buf.current = "";
 
       const codes = codesFor(room()!.address, v.level);
       drawVault(ctx, L, {
@@ -536,37 +634,91 @@ export default function App() {
         keyB: v.keyB,
         keyWindowMs: L.keyWindowMs,
         pulseOn: pulse,
+        valveHalf: vr.half,
+        valveAt: vr.at,
+        carryMe: watchMode ? !!watchEntries[0]?.data.carry : carryRef.current,
+        carryPartner: watchMode ? !!watchEntries[1]?.data.carry : !!p?.data.carry,
+        chargeFrac,
+        ventOff: (v.doors & LATCH) !== 0 || myTile === "V" || pTile === "V",
+        heldI: held.i,
+        heldJ: held.j,
       });
 
       // contextual prompts
       ctx.font = "11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      const pad = myPad();
-      const theirPad = myRole() === 0 ? L.pos.k : L.pos.K;
-      const padSolved = v.doors & (myRole() === 0 ? LOCK2 : LOCK1);
       const winS = (L.keyWindowMs / 1000).toFixed(1).replace(/\.0$/, "");
-      if (!padSolved && near(me.x, me.y, pad.x, pad.y, 1.5))
-        ctx.fillText("type the 4 digits your partner reads out", pad.x, pad.y - 24);
-      if (near(me.x, me.y, theirPad.x, theirPad.y, 1.5))
-        ctx.fillText("your partner's keypad — read them your panel", theirPad.x, theirPad.y - 24);
-      if (!(v.doors & LATCH) && near(me.x, me.y, L.pos.S.x, L.pos.S.y, 1.5))
+      const nearPos = (key: string, tiles = 1.5) =>
+        !watchMode && near(me.x, me.y, L.pos[key].x, L.pos[key].y, tiles);
+      if (mech.door1 === "valves" && !(v.doors & DOOR1)) {
+        for (const ch of ["c", "d", "e", "f"])
+          if (nearPos(ch)) {
+            ctx.fillText(
+              vr.half === 0 ? "valves 1 + 2 together first" : "now 3 + 4 — before the ring runs out",
+              L.pos[ch].x,
+              L.pos[ch].y - 22,
+            );
+            break;
+          }
+      }
+      if (mech.locks === "codes") {
+        const pad = myPad();
+        const theirPad = myRole() === 0 ? L.pos.k : L.pos.K;
+        const padSolved = v.doors & (myRole() === 0 ? LOCK2 : LOCK1);
+        if (!padSolved && near(me.x, me.y, pad.x, pad.y, 1.5))
+          ctx.fillText("type the 4 digits your partner reads out", pad.x, pad.y - 24);
+        if (near(me.x, me.y, theirPad.x, theirPad.y, 1.5))
+          ctx.fillText("your partner's keypad — read them your panel", theirPad.x, theirPad.y - 24);
+      }
+      if (mech.locks === "fuel") {
+        const mine = myRole() === 0;
+        const cradle = mine ? L.pos.u : L.pos.U;
+        const socket = mine ? L.pos.o : L.pos.O;
+        const bit = mine ? LOCK2 : LOCK1;
+        if (!(v.doors & bit) && !carryRef.current && near(me.x, me.y, cradle.x, cradle.y, 1.5))
+          ctx.fillText("[E] grab your fuel cell", cradle.x, cradle.y - 22);
+        if (carryRef.current && near(me.x, me.y, socket.x, socket.y, 1.5))
+          ctx.fillText("[E] slot the cell", socket.x, socket.y - 22);
+        else if (carryRef.current)
+          ctx.fillText("to your yellow socket — coolant knocks it loose", me.x, me.y + 30);
+      }
+      if (mech.locks === "levers") {
+        if (nearPos("i") || nearPos("j"))
+          ctx.fillText("stand here — holds the FAR gate open for your partner", me.x, me.y - 34);
+        if (!(v.doors & LOCK2) && nearPos("a"))
+          ctx.fillText("[E] throw the breaker", L.pos.a.x, L.pos.a.y - 20);
+        if (!(v.doors & LOCK1) && nearPos("b"))
+          ctx.fillText("[E] throw the breaker", L.pos.b.x, L.pos.b.y - 20);
+      }
+      if (mech.latch === "gate" && !(v.doors & LATCH) && nearPos("S"))
         ctx.fillText("[E] lock the gate open", L.pos.S.x, L.pos.S.y - 20);
-      if (myRole() === 0 && near(me.x, me.y, L.pos.A.x, L.pos.A.y, 1.5))
+      if (mech.latch === "vent") {
+        if (nearPos("V"))
+          ctx.fillText("stand here — freezes the vent stream for your partner", L.pos.V.x, L.pos.V.y - 22);
+        if (!(v.doors & LATCH) && nearPos("S"))
+          ctx.fillText("[E] purge the vents for good", L.pos.S.x, L.pos.S.y - 20);
+      }
+      if (mech.latch === "charge" && !(v.doors & LATCH) && (nearPos("h") || nearPos("H")))
+        ctx.fillText("hold BOTH pads together for 3s", L.pos.h.x, L.pos.h.y - 22);
+      if (myRole() === 0 && nearPos("A"))
         ctx.fillText(`[E] turn key A — together, within ${winS}s`, L.pos.A.x, L.pos.A.y - 24);
-      if (myRole() === 1 && near(me.x, me.y, L.pos.B.x, L.pos.B.y, 1.5))
+      if (myRole() === 1 && nearPos("B"))
         ctx.fillText(`[E] turn key B — together, within ${winS}s`, L.pos.B.x, L.pos.B.y - 24);
 
       for (const [key, pp] of remotes.current) {
         if (key === selfKey) continue;
-        drawPlayer(ctx, key, pp.data, { chat: chats.current.get(key) });
+        drawPlayer(ctx, key, pp.data, {
+          chat: chats.current.get(key),
+          carry: !!pp.data.carry,
+        });
       }
       if (!watchMode)
         drawPlayer(
           ctx,
           selfKey,
           { x: me.x, y: me.y, facing: me.facing, name },
-          { self: true, chat: chats.current.get(selfKey) },
+          { self: true, chat: chats.current.get(selfKey), carry: carryRef.current },
         );
 
       // hazard hit: red flash fading out
@@ -617,7 +769,21 @@ export default function App() {
   };
 
   const room = roomRef.current;
-  const lvName = LEVELS[Math.min(level, LEVELS.length - 1)].name;
+  const curLv = LEVELS[Math.min(level, LEVELS.length - 1)];
+  const lvName = curLv.name;
+  const OBJ: Record<string, string> = {
+    plates: "① one of you on each glowing plate — at the same moment",
+    valves: "① valves 1+2 pressed together — then valves 3+4 within 6 seconds",
+    bridge:
+      "① the floor is cracked glass only your PARTNER can see — call out safe tiles, then stand on both buttons together",
+    codes:
+      "② read your green panel to your partner (Enter to chat) — type the code they read you on your yellow keypad (0-9)",
+    fuel: "② grab your fuel cell with E and carry it to your yellow socket — coolant knocks it loose",
+    levers: "② each breaker hides behind a gate only your partner's lever holds open — take turns",
+    gate: "③ one stands on the lever to hold the gate — the other walks through and presses E on the switch",
+    vent: "③ one stands on the vent plate to freeze the pink stream — the other crosses it and presses E on the purge switch",
+    charge: "③ slip past the pulse wall and hold BOTH charge pads together for 3 seconds",
+  };
   const objective = !room
     ? ""
     : watchMode
@@ -629,16 +795,27 @@ export default function App() {
         : cleared
           ? "level cleared — hit next level when you're both ready"
           : !(doors & DOOR1)
-            ? "① one of you on each glowing plate — at the same moment"
+            ? OBJ[curLv.mech.door1]
             : !(doors & LOCK1) || !(doors & LOCK2)
-              ? "② read your green panel to your partner (Enter to chat) — type the code they read you on your yellow keypad (0-9)"
+              ? OBJ[curLv.mech.locks]
               : !(doors & LATCH)
-                ? "③ one stands on the lever to hold the gate — the other walks through and presses E on the switch"
+                ? OBJ[curLv.mech.latch]
                 : `④ you are key ${myRole() === 0 ? "A" : "B"} — count down in chat, both press E together`;
+  const STEP_LABEL: Record<string, string> = {
+    plates: "plates",
+    valves: "valves",
+    bridge: "bridge",
+    codes: "codes",
+    fuel: "fuel",
+    levers: "breakers",
+    gate: "gate",
+    vent: "purge",
+    charge: "charge",
+  };
   const steps: [string, boolean][] = [
-    ["plates", (doors & DOOR1) !== 0],
-    ["codes", (doors & LOCK1) !== 0 && (doors & LOCK2) !== 0],
-    ["gate", (doors & LATCH) !== 0],
+    [STEP_LABEL[curLv.mech.door1], (doors & DOOR1) !== 0],
+    [STEP_LABEL[curLv.mech.locks], (doors & LOCK1) !== 0 && (doors & LOCK2) !== 0],
+    [STEP_LABEL[curLv.mech.latch], (doors & LATCH) !== 0],
     ["keys", cleared || out],
   ];
 
@@ -695,11 +872,13 @@ export default function App() {
         <div className="panel">
           <p>
             <b>The Vault</b> — MagicBlock's co-op escape room idea, built on
-            solsocket. {LEVELS.length} levels of puzzles that are impossible
-            alone: pressure plates you both stand on, codes only your partner
-            can read, a gate one of you holds open, and two keys turned in the
-            same shrinking window. Every move is a zero-fee onchain transaction
-            on an ephemeral rollup
+            solsocket. {LEVELS.length} levels, nine different puzzles that are
+            impossible alone: codes only your partner can read, valves fired in
+            sequence, a fuel run through live coolant, a vent stream one of you
+            freezes for the other, a glass bridge only your partner can see you
+            across, cross-held gates — and two keys turned in the same
+            shrinking window. Every move is a zero-fee onchain transaction on
+            an ephemeral rollup
             {cluster === "local" ? " (local stack)" : " (devnet)"}.
           </p>
           {watchMode ? (
@@ -807,11 +986,12 @@ export default function App() {
               <kbd>D</kbd> move · <kbd>Enter</kbd> chat · <kbd>E</kbd> use ·{" "}
               <kbd>0</kbd>–<kbd>9</kbd> keypad
             </div>
-            <div>1 — stand on both plates at the same time</div>
-            <div>2 — read your panel aloud; type the code you're told</div>
-            <div>3 — one holds the lever, one locks the gate</div>
-            <div>4 — turn both keys together (the window shrinks each level)</div>
-            <div>⚠ later levels: orange coolant sends you back to spawn,</div>
+            <div>every level is a different set of puzzles — the banner</div>
+            <div>at the bottom always tells you the current objective</div>
+            <div>lvl 1 the vault: plates · code relay · held gate</div>
+            <div>lvl 2 the reactor: valve sequence · fuel run · vent purge</div>
+            <div>lvl 3 the core: glass bridge · cross levers · charge pads</div>
+            <div>⚠ coolant, glass and vent steam send you back to spawn;</div>
             <div>cyan pulse walls only open on the beat — time your runs</div>
             <span className="hint-note">every action is an onchain tx · move to dismiss</span>
           </div>

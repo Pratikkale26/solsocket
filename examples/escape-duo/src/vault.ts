@@ -1,30 +1,63 @@
 import { PublicKey } from "@solana/web3.js";
 
-/** Escape levels. Every layout is 28×12 and carries the same puzzle chars:
- *  `#` wall  `.` floor  `1` plate door  `2` code door  `3` held gate
- *  `4` vault door  `P`/`Q` pressure plates  `g`/`G` code panels  `k`/`K`
- *  keypads  `L` lever  `S` gate switch  `A`/`B` key stations
- *  Terrain hazards (level flavor): `~` coolant — stepping on it resets you
- *  to spawn; `m` pulse barrier — passable only while the pulse is open,
- *  clocked off the run's onchain start timestamp so every client agrees. */
+/** Escape levels. Every layout is 28×12. Progress is always the same four
+ *  onchain bits (DOOR1 → LOCK1+LOCK2 → LATCH → keys), but each level maps
+ *  DIFFERENT co-op puzzles onto them:
+ *
+ *  door tiles   `1` stage-1 door  `2` stage-2 door  `3` stage-3 door
+ *               `4` vault door (never opens — escaping is the keys)
+ *  terrain      `#` wall  `.` floor  `~` coolant (touch → respawn)
+ *               `m` pulse barrier (passable only on the beat)
+ *               `v` vent stream (deadly unless suppressed from the vent plate)
+ *               `x`/`y` cracked glass (deadly; only your PARTNER sees it —
+ *               x is visible to the joiner, y to the creator)
+ *               `5`/`6` lever gates (open only while lever i/j is held)
+ *
+ *  puzzle chars per mechanic:
+ *    plates  P Q          valves  c d e f     bridge  P Q (+ x y glass)
+ *    codes   g G k K      fuel    u U o O     levers  i j a b (+ gates 5 6)
+ *    gate    L S          vent    V S (+ v)   charge  h H
+ *    keys    A B (every level's finale)
+ */
 export const TILE = 24;
 export const COLS = 28;
 export const ROWS = 12;
 export const WIDTH = COLS * TILE;
 export const HEIGHT = ROWS * TILE;
 
+export interface Mech {
+  door1: "plates" | "valves" | "bridge";
+  locks: "codes" | "fuel" | "levers";
+  latch: "gate" | "vent" | "charge";
+}
+
+const MECH_CHARS: Record<string, string> = {
+  plates: "PQ",
+  valves: "cdef",
+  bridge: "PQ",
+  codes: "gGkK",
+  fuel: "uUoO",
+  levers: "ijab",
+  gate: "LS",
+  vent: "VS",
+  charge: "hH",
+};
+
 interface LevelDef {
   name: string;
   keyWindowMs: number;
   spawnTile: { c: number; r: number };
+  mech: Mech;
   layout: string[];
 }
 
 const DEFS: LevelDef[] = [
   {
+    // The tutorial: simultaneous plates, the code relay, the held gate.
     name: "The Vault",
     keyWindowMs: 2_000,
     spawnTile: { c: 3, r: 5 },
+    mech: { door1: "plates", locks: "codes", latch: "gate" },
     layout: [
       "############################",
       "#......#......#.....#..A...#",
@@ -41,40 +74,47 @@ const DEFS: LevelDef[] = [
     ],
   },
   {
+    // Flow valves in sequence, the fuel run through the coolant maze,
+    // and a vent stream one player freezes while the other crosses it.
     name: "The Reactor",
     keyWindowMs: 1_600,
-    spawnTile: { c: 5, r: 4 },
+    spawnTile: { c: 3, r: 5 },
+    mech: { door1: "valves", locks: "fuel", latch: "vent" },
     layout: [
       "############################",
-      "#....P.#..K...#.....#..B...#",
-      "#..##..#.~~...#.##..#......#",
-      "#..#...#..G...#.....#..##..#",
-      "#..#...1......2..L..3...#..#",
-      "#..##..1.~~~..2.....3...#..4",
-      "#...#..1......2.....3..##..4",
-      "#...#..#..g...#.##..#......#",
-      "#...#..#.~~...#.....#.S....#",
-      "#......#..k...#..~..#......#",
-      "#....Q.#......#.....#..A...#",
+      "#c....e#u.~..o#..v..#..A...#",
+      "#......#.~~.~.#..v..#......#",
+      "#..~...#....~.#..v..#.###..#",
+      "#......1.~....2..v..3......#",
+      "#......1...~~.2V.v.S3......4",
+      "#......1.~....2..v..3......4",
+      "#...~..#.~.~~.#..v..#......#",
+      "#......#.~....#..v..#.###..#",
+      "#......#......#..v..#......#",
+      "#f....d#U..~.O#..v..#..B...#",
       "############################",
     ],
   },
   {
+    // The glass bridge only your partner can see you across, cross levers
+    // ("I hold for you, you hold for me"), and the charge pads behind the
+    // pulse wall.
     name: "The Core",
     keyWindowMs: 1_200,
-    spawnTile: { c: 2, r: 2 },
+    spawnTile: { c: 2, r: 5 },
+    mech: { door1: "bridge", locks: "levers", latch: "charge" },
     layout: [
       "############################",
-      "#P....##...k..#..L..#.A....#",
-      "#.....##......#.....#.m.m..#",
-      "#.##...##mmmmm#..#..#..#####",
-      "#......1..g...2..#..3......#",
-      "#.###..1......2..#..3......4",
-      "#...#..1......2.....3..###.4",
-      "#......#..G...#.....#....#.#",
-      "#..##..#.~~...#..#..#....#.#",
-      "#......#...K..#.....#.S..#.#",
-      "#....Q.#......#.....#....B.#",
+      "#.xx.P.#i.5.a.#.m.h.#..A...#",
+      "#x...x.#..#####.m...#..m...#",
+      "#..x..x#......#.m...#.###..#",
+      "#......1......2.m...3......#",
+      "#......1......2.m...3......4",
+      "#......1......2.m...3......4",
+      "#......#......#.m...#......#",
+      "#..y..y#......#.m...#.###..#",
+      "#y...y.#..#####.m...#..m...#",
+      "#.yy.Q.#j.6.b.#.m.H.#..B...#",
       "############################",
     ],
   },
@@ -84,6 +124,9 @@ export interface Level {
   index: number;
   name: string;
   keyWindowMs: number;
+  mech: Mech;
+  /** The puzzle chars this level requires exactly one of. */
+  chars: string;
   spawn: { x: number; y: number };
   pos: Record<string, { x: number; y: number }>;
   tile(c: number, r: number): string;
@@ -93,8 +136,10 @@ function build(def: LevelDef, index: number): Level {
   if (def.layout.length !== ROWS) throw new Error(`${def.name}: needs ${ROWS} rows`);
   for (const row of def.layout)
     if (row.length !== COLS) throw new Error(`${def.name}: row length ${row.length} !== ${COLS}`);
+  const chars =
+    MECH_CHARS[def.mech.door1] + MECH_CHARS[def.mech.locks] + MECH_CHARS[def.mech.latch] + "AB";
   const pos: Record<string, { x: number; y: number }> = {};
-  for (const ch of [..."PQgGkKLSAB"]) {
+  for (const ch of [...chars]) {
     let found = 0;
     for (let r = 0; r < ROWS; r++) {
       const c = def.layout[r].indexOf(ch);
@@ -112,6 +157,8 @@ function build(def: LevelDef, index: number): Level {
     index,
     name: def.name,
     keyWindowMs: def.keyWindowMs,
+    mech: def.mech,
+    chars,
     spawn: { x: def.spawnTile.c * TILE + TILE / 2, y: def.spawnTile.r * TILE + TILE / 2 },
     pos,
     tile,
@@ -129,10 +176,10 @@ export type VaultState = {
   start: number; // ms timestamp: this level's clock
   run: number; // ms timestamp: the whole run's clock (set once, level 0)
 };
-export const DOOR1 = 1; // both plates pressed at once
-export const LOCK1 = 2; // keypad k solved
-export const LOCK2 = 4; // keypad K solved
-export const LATCH = 8; // gate switch hit — gate 3 stays open
+export const DOOR1 = 1; // stage 1 solved (plates / valves / bridge buttons)
+export const LOCK1 = 2; // joiner's stage-2 task (keypad k / fuel cell U / breaker b)
+export const LOCK2 = 4; // creator's stage-2 task (keypad K / fuel cell u / breaker a)
+export const LATCH = 8; // stage 3 solved — door 3 stays open
 
 export const levelOf = (s: VaultState): Level =>
   LEVELS[Math.min(Math.max(s.level, 0), LEVELS.length - 1)];
@@ -144,6 +191,11 @@ export const PULSE_MS = 1_700;
 export const pulseOpen = (runTs: number, now: number) =>
   runTs === 0 || Math.floor((now - runTs) / PULSE_MS) % 2 === 0;
 
+/** The Core's charge pads: hold both together this long. */
+export const CHARGE_MS = 3_000;
+/** The Reactor's valves: pair 3+4 must follow pair 1+2 within this. */
+export const VALVE_WINDOW_MS = 6_000;
+
 /** Both keys turned inside this level's window? */
 export const solvedKeys = (s: VaultState) =>
   s.keyA > 0 && s.keyB > 0 && Math.abs(s.keyA - s.keyB) <= levelOf(s).keyWindowMs;
@@ -153,12 +205,19 @@ export const isFinal = (s: VaultState) => s.level >= LEVELS.length - 1;
 export const tileUnder = (lv: Level, x: number, y: number) =>
   lv.tile(Math.floor(x / TILE), Math.floor(y / TILE));
 
+/** What's held / suppressed right now — the transient inputs to walkability. */
+export interface Held {
+  lever?: boolean; // L held (gate mech): door 3 open while held
+  i?: boolean; // lever i held: gate 5 open
+  j?: boolean; // lever j held: gate 6 open
+}
+
 export function walkable(
   lv: Level,
   x: number,
   y: number,
   doors: number,
-  leverHeld: boolean,
+  held: Held = {},
   pulse = true,
   half = 8,
 ): boolean {
@@ -172,12 +231,20 @@ export function walkable(
     if (t === "#" || t === "4") return false;
     if (t === "1" && !(doors & DOOR1)) return false;
     if (t === "2" && !(doors & LOCK1 && doors & LOCK2)) return false;
-    if (t === "3" && !(doors & LATCH) && !leverHeld) return false;
+    if (t === "3" && !(doors & LATCH) && !held.lever) return false;
+    if (t === "5" && !held.i) return false;
+    if (t === "6" && !held.j) return false;
     if (t === "m" && !pulse) return false;
-    // `~` is deliberately walkable — stepping on it is the mistake.
+    // `~`, `v`, `x`, `y` are deliberately walkable — stepping on them is
+    // the mistake (see deadlyTile).
   }
   return true;
 }
+
+/** Is standing on this tile lethal right now? (`ventSafe`: the vent stream
+ *  is suppressed — partner on the vent plate, or already purged.) */
+export const deadlyTile = (t: string, ventSafe: boolean) =>
+  t === "~" || t === "x" || t === "y" || (t === "v" && !ventSafe);
 
 export function near(ax: number, ay: number, bx: number, by: number, tiles: number): boolean {
   const r = tiles * TILE;
@@ -202,23 +269,33 @@ export interface DrawOpts {
   t: number;
   doors: number;
   frozen: boolean; // level solved — pose for the overlay
-  role: number; // 0 or 1 — decides which panel/keypad is "yours"
-  seeCode: number[]; // the code THIS viewer can read off their panel
-  buf: string; // digits typed so far on the viewer's keypad
+  role: number; // 0 creator / 1 joiner / -1 spectator (sees everything)
+  seeCode: number[]; // codes mech: the code THIS viewer can read
+  buf: string; // codes mech: digits typed so far
   meTile: string;
   partnerTile: string;
   keyA: number;
   keyB: number;
   keyWindowMs: number;
-  /** Are the `m` pulse barriers currently open? */
-  pulseOn: boolean;
+  pulseOn: boolean; // are the `m` barriers currently open?
+  valveHalf: number; // valves mech: 1 once pair 1+2 latched
+  valveAt: number; // valves mech: when pair 1 latched (countdown ring)
+  carryMe: boolean; // fuel mech: is the viewer carrying a cell?
+  carryPartner: boolean;
+  chargeFrac: number; // charge mech: 0..1 hold progress
+  ventOff: boolean; // vent mech: stream suppressed right now?
+  heldI: boolean; // levers mech: gate 5 open?
+  heldJ: boolean;
 }
 
 const shade = (c: number, r: number) => (c * 7 + r * 13) % 3;
 
 export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts) {
+  const { mech } = lv;
   const gateOpen =
-    (o.doors & LATCH) !== 0 || o.meTile === "L" || o.partnerTile === "L";
+    (o.doors & LATCH) !== 0 ||
+    (mech.latch === "gate" && (o.meTile === "L" || o.partnerTile === "L"));
+  const on = (t: string) => o.meTile === t || o.partnerTile === t;
 
   const floor = (x: number, y: number, v: number) => {
     ctx.fillStyle = ["#262833", "#292b37", "#242631"][v];
@@ -261,6 +338,23 @@ export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts)
           }
           break;
         }
+        case "5":
+        case "6": {
+          // lever gates — open only while the matching lever is held
+          const open = ch === "5" ? o.heldI : o.heldJ;
+          if (open) {
+            floor(x, y, v);
+            ctx.fillStyle = "rgba(250,204,21,0.3)";
+            ctx.fillRect(x, y, 3, TILE);
+            ctx.fillRect(x + TILE - 3, y, 3, TILE);
+          } else {
+            ctx.fillStyle = "#4a4f63";
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.fillStyle = "#facc15";
+            for (let i = 0; i < 3; i++) ctx.fillRect(x + 3, y + 4 + i * 7, TILE - 6, 3);
+          }
+          break;
+        }
         case "4": {
           ctx.fillStyle = o.frozen ? "#141520" : "#8a6d1f";
           ctx.fillRect(x, y, TILE, TILE);
@@ -280,6 +374,43 @@ export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts)
           ctx.fillRect(x, y, TILE, TILE);
           ctx.fillStyle = "rgba(255,255,255,0.25)";
           ctx.fillRect(x + 4, y + 10 + Math.sin(o.t / 300 + c) * 3, TILE - 8, 2);
+          break;
+        }
+        case "v": {
+          // vent stream — deadly magenta steam until suppressed
+          if (o.ventOff) {
+            ctx.fillStyle = "#20303a";
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.fillStyle = "rgba(103,232,249,0.18)";
+            ctx.fillRect(x + 9, y + 4, 2, 2);
+            ctx.fillRect(x + 15, y + 14, 2, 2);
+          } else {
+            const glow = 40 + Math.sin(o.t / 180 + r * 1.3) * 10;
+            ctx.fillStyle = `hsl(315 75% ${glow}%)`;
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.fillStyle = "rgba(255,255,255,0.3)";
+            ctx.fillRect(x + 4 + Math.sin(o.t / 200 + r) * 3, y + 4, 2, TILE - 8);
+          }
+          break;
+        }
+        case "x":
+        case "y": {
+          floor(x, y, v);
+          // Cracked glass: x is A's crossing (only the JOINER sees it),
+          // y is B's (only the CREATOR sees it). Spectators see both.
+          const visible =
+            o.role === -1 || (ch === "x" ? o.role === 1 : o.role === 0);
+          if (visible) {
+            ctx.strokeStyle = "rgba(226,232,240,0.5)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 4, y + 5);
+            ctx.lineTo(x + 13, y + 12);
+            ctx.lineTo(x + 8, y + 19);
+            ctx.moveTo(x + 13, y + 12);
+            ctx.lineTo(x + 20, y + 8);
+            ctx.stroke();
+          }
           break;
         }
         case "m": {
@@ -308,6 +439,8 @@ export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts)
     }
   }
 
+  ctx.textAlign = "center";
+
   const plate = (p: { x: number; y: number }, lit: boolean) => {
     ctx.beginPath();
     ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
@@ -317,58 +450,167 @@ export function drawVault(ctx: CanvasRenderingContext2D, lv: Level, o: DrawOpts)
     ctx.lineWidth = 2;
     ctx.stroke();
   };
-  plate(lv.pos.P, o.meTile === "P" || o.partnerTile === "P");
-  plate(lv.pos.Q, o.meTile === "Q" || o.partnerTile === "Q");
-
-  // lever + switch
-  const lever = lv.pos.L;
-  const held = o.meTile === "L" || o.partnerTile === "L";
-  ctx.fillStyle = held ? "#facc15" : "#3a3e55";
-  ctx.fillRect(lever.x - 3, lever.y - 10, 6, 20);
-  ctx.beginPath();
-  ctx.arc(lever.x, lever.y - 10, 5, 0, Math.PI * 2);
-  ctx.fill();
-  const sw = lv.pos.S;
-  ctx.beginPath();
-  ctx.arc(sw.x, sw.y, 7, 0, Math.PI * 2);
-  ctx.fillStyle = o.doors & LATCH ? "#4ade80" : "#f87171";
-  ctx.fill();
-
-  // code panels — only the right player can read each one
-  ctx.textAlign = "center";
-  const panel = (p: { x: number; y: number }, mine: boolean) => {
-    ctx.font = "bold 10px ui-monospace, monospace";
-    ctx.fillStyle = "#14151d";
-    ctx.fillRect(p.x - 23, p.y - 9, 46, 18);
-    ctx.strokeStyle = mine ? "#4ade80" : "#3a3e55";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(p.x - 23, p.y - 9, 46, 18);
-    ctx.fillStyle = mine ? "#4ade80" : "#565b73";
-    ctx.fillText(mine ? o.seeCode.join(" ") : "· · · ·", p.x, p.y + 4);
+  const lever = (p: { x: number; y: number }, held: boolean) => {
+    ctx.fillStyle = held ? "#facc15" : "#3a3e55";
+    ctx.fillRect(p.x - 3, p.y - 10, 6, 20);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y - 10, 5, 0, Math.PI * 2);
+    ctx.fill();
   };
-  panel(lv.pos.g, o.role === 0);
-  panel(lv.pos.G, o.role === 1);
-  ctx.font = "bold 11px ui-monospace, monospace";
+  const switchDot = (p: { x: number; y: number }, done: boolean) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = done ? "#4ade80" : "#f87171";
+    ctx.fill();
+  };
 
-  // keypads — each usable only by the player who CAN'T see its code
-  const pad = (p: { x: number; y: number }, mine: boolean, solved: boolean) => {
-    ctx.fillStyle = solved ? "#1f3d2b" : "#14151d";
-    ctx.fillRect(p.x - 10, p.y - 10, 20, 20);
-    ctx.strokeStyle = solved ? "#4ade80" : mine ? "#facc15" : "#3a3e55";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(p.x - 10, p.y - 10, 20, 20);
-    ctx.fillStyle = solved ? "#4ade80" : "#565b73";
-    for (let r = 0; r < 3; r++)
-      for (let c = 0; c < 3; c++) ctx.fillRect(p.x - 6 + c * 5, p.y - 6 + r * 5, 3, 3);
-    if (mine && !solved && o.buf) {
-      ctx.fillStyle = "#facc15";
-      ctx.fillText(o.buf.padEnd(4, "·"), p.x, p.y - 15);
+  // ── stage 1 ──
+  if (mech.door1 === "plates" || mech.door1 === "bridge") {
+    plate(lv.pos.P, on("P"));
+    plate(lv.pos.Q, on("Q"));
+  } else {
+    // valves 1..4: pairs (1,2) then (3,4) within the window
+    const solved = (o.doors & DOOR1) !== 0;
+    const order: [string, number][] = [
+      ["c", 1],
+      ["d", 2],
+      ["e", 3],
+      ["f", 4],
+    ];
+    for (const [ch, n] of order) {
+      const p = lv.pos[ch];
+      const firstPair = n <= 2;
+      const done = solved || (o.valveHalf >= 1 && firstPair);
+      const hot = !solved && (firstPair ? o.valveHalf === 0 : o.valveHalf === 1);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = done ? "#4ade80" : on(ch) ? "#facc15" : hot ? "#3a3e55" : "#2c2f40";
+      ctx.fill();
+      ctx.strokeStyle = done ? "#86efac" : hot ? "#facc15" : "#4a4f63";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = done ? "#14151d" : "#c7cbde";
+      ctx.font = "bold 10px ui-monospace, monospace";
+      ctx.fillText(String(n), p.x, p.y + 3.5);
     }
-  };
-  pad(lv.pos.k, o.role === 1, (o.doors & LOCK1) !== 0);
-  pad(lv.pos.K, o.role === 0, (o.doors & LOCK2) !== 0);
+    // pair 1 latched: countdown ring on the second pair
+    if (!solved && o.valveHalf === 1) {
+      const left = 1 - Math.min(1, (Date.now() - o.valveAt) / VALVE_WINDOW_MS);
+      for (const ch of ["e", "f"]) {
+        const p = lv.pos[ch];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 13, -Math.PI / 2, -Math.PI / 2 + left * Math.PI * 2);
+        ctx.strokeStyle = "#facc15";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  }
 
-  // key stations — pulse amber inside the window, green once solved
+  // ── stage 2 ──
+  if (mech.locks === "codes") {
+    const panel = (p: { x: number; y: number }, mine: boolean) => {
+      ctx.font = "bold 10px ui-monospace, monospace";
+      ctx.fillStyle = "#14151d";
+      ctx.fillRect(p.x - 23, p.y - 9, 46, 18);
+      ctx.strokeStyle = mine ? "#4ade80" : "#3a3e55";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(p.x - 23, p.y - 9, 46, 18);
+      ctx.fillStyle = mine ? "#4ade80" : "#565b73";
+      ctx.fillText(mine ? o.seeCode.join(" ") : "· · · ·", p.x, p.y + 4);
+    };
+    panel(lv.pos.g, o.role === 0);
+    panel(lv.pos.G, o.role === 1);
+    ctx.font = "bold 11px ui-monospace, monospace";
+    const pad = (p: { x: number; y: number }, mine: boolean, solved: boolean) => {
+      ctx.fillStyle = solved ? "#1f3d2b" : "#14151d";
+      ctx.fillRect(p.x - 10, p.y - 10, 20, 20);
+      ctx.strokeStyle = solved ? "#4ade80" : mine ? "#facc15" : "#3a3e55";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(p.x - 10, p.y - 10, 20, 20);
+      ctx.fillStyle = solved ? "#4ade80" : "#565b73";
+      for (let r = 0; r < 3; r++)
+        for (let c = 0; c < 3; c++) ctx.fillRect(p.x - 6 + c * 5, p.y - 6 + r * 5, 3, 3);
+      if (mine && !solved && o.buf) {
+        ctx.fillStyle = "#facc15";
+        ctx.fillText(o.buf.padEnd(4, "·"), p.x, p.y - 15);
+      }
+    };
+    pad(lv.pos.k, o.role === 1, (o.doors & LOCK1) !== 0);
+    pad(lv.pos.K, o.role === 0, (o.doors & LOCK2) !== 0);
+  } else if (mech.locks === "fuel") {
+    // cradles hold the cells; sockets glow green once fed
+    const cell = (x: number, y: number) => {
+      ctx.beginPath();
+      ctx.roundRect(x - 5, y - 7, 10, 14, 3);
+      ctx.fillStyle = "#fbbf24";
+      ctx.fill();
+      ctx.strokeStyle = "#fde68a";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    };
+    const cradle = (p: { x: number; y: number }, hasCell: boolean, mine: boolean) => {
+      ctx.strokeStyle = mine ? "#facc15" : "#4a4f63";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(p.x - 9, p.y - 9, 18, 18);
+      if (hasCell) cell(p.x, p.y);
+    };
+    const socket = (p: { x: number; y: number }, fed: boolean, mine: boolean) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = fed ? "#1f3d2b" : "#14151d";
+      ctx.fill();
+      ctx.strokeStyle = fed ? "#4ade80" : mine ? "#facc15" : "#4a4f63";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      if (fed) cell(p.x, p.y);
+    };
+    // u/o belong to the creator (LOCK2), U/O to the joiner (LOCK1)
+    const carriedByOwner = (ownerRole: number) =>
+      o.role === -1
+        ? o.carryMe || o.carryPartner
+        : ownerRole === o.role
+          ? o.carryMe
+          : o.carryPartner;
+    cradle(lv.pos.u, !(o.doors & LOCK2) && !carriedByOwner(0), o.role === 0);
+    cradle(lv.pos.U, !(o.doors & LOCK1) && !carriedByOwner(1), o.role === 1);
+    socket(lv.pos.o, (o.doors & LOCK2) !== 0, o.role === 0);
+    socket(lv.pos.O, (o.doors & LOCK1) !== 0, o.role === 1);
+  } else {
+    // cross levers + breakers
+    lever(lv.pos.i, o.heldI);
+    lever(lv.pos.j, o.heldJ);
+    switchDot(lv.pos.a, (o.doors & LOCK2) !== 0);
+    switchDot(lv.pos.b, (o.doors & LOCK1) !== 0);
+  }
+
+  // ── stage 3 ──
+  if (mech.latch === "gate") {
+    lever(lv.pos.L, on("L"));
+    switchDot(lv.pos.S, (o.doors & LATCH) !== 0);
+  } else if (mech.latch === "vent") {
+    plate(lv.pos.V, on("V"));
+    switchDot(lv.pos.S, (o.doors & LATCH) !== 0);
+  } else {
+    // charge pads with a shared progress ring
+    const padC = (p: { x: number; y: number }, lit: boolean) => {
+      ctx.beginPath();
+      ctx.roundRect(p.x - 8, p.y - 8, 16, 16, 4);
+      ctx.fillStyle = o.doors & LATCH ? "#4ade80" : lit ? "#facc15" : "#3a3e55";
+      ctx.fill();
+      if (!(o.doors & LATCH) && o.chargeFrac > 0) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 13, -Math.PI / 2, -Math.PI / 2 + o.chargeFrac * Math.PI * 2);
+        ctx.strokeStyle = "#4ade80";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+    };
+    padC(lv.pos.h, on("h"));
+    padC(lv.pos.H, on("H"));
+  }
+
+  // ── keys — every level's finale ──
   const now = Date.now();
   const station = (p: { x: number; y: number }, ts: number, label: string) => {
     const fresh = ts > 0 && now - ts <= o.keyWindowMs;
@@ -402,7 +644,7 @@ export function drawPlayer(
   ctx: CanvasRenderingContext2D,
   key: string,
   p: { x: number; y: number; facing: number; name: string },
-  opts: { self?: boolean; chat?: Bubble },
+  opts: { self?: boolean; chat?: Bubble; carry?: boolean },
 ) {
   const hue = hueOf(key);
   const { x, y } = p;
@@ -423,6 +665,17 @@ export function drawPlayer(
   if (p.facing !== 3) {
     ctx.fillRect(x - 4 + eyeDx, y - 6, 3, 4);
     ctx.fillRect(x + 2 + eyeDx, y - 6, 3, 4);
+  }
+
+  if (opts.carry) {
+    // the fuel cell rides on your head
+    ctx.beginPath();
+    ctx.roundRect(x - 4, y - 22, 8, 11, 2);
+    ctx.fillStyle = "#fbbf24";
+    ctx.fill();
+    ctx.strokeStyle = "#fde68a";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   ctx.font = "bold 10px ui-monospace, monospace";
