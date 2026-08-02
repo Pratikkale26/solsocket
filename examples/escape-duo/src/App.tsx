@@ -763,7 +763,7 @@ export default function App() {
       await refreshBalance();
     } catch {
       setError(
-        "Airdrop failed (devnet faucet rate limit). Send ~0.01 devnet SOL to the burner above, then reload.",
+        "Airdrop failed (devnet faucet rate limit). Click the wallet chip to copy your burner address, send it ~0.01 devnet SOL, then reload.",
       );
     }
   };
@@ -869,88 +869,139 @@ export default function App() {
       </header>
 
       {phase === "funding" && (
-        <div className="panel">
-          <p>
-            <b>The Vault</b> — MagicBlock's co-op escape room idea, built on
-            solsocket. {LEVELS.length} levels, nine different puzzles that are
-            impossible alone: codes only your partner can read, valves fired in
-            sequence, a fuel run through live coolant, a vent stream one of you
-            freezes for the other, a glass bridge only your partner can see you
-            across, cross-held gates — and two keys turned in the same
-            shrinking window. Every move is a zero-fee onchain transaction on
-            an ephemeral rollup
-            {cluster === "local" ? " (local stack)" : " (devnet)"}.
-          </p>
-          {watchMode ? (
-            <>
-              <p>
-                You're about to <b>spectate</b> — reading a live room straight off
-                the rollup. No transaction, no fees, your wallet never needs
-                funding.
-              </p>
-              <div className="row">
-                <button className="primary" onClick={enter}>
-                  watch this vault live
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p>
-                burner: <code>{wallet.publicKey.toBase58()}</code>
-                <br />
-                balance: {balance === null ? "…" : `${balance.toFixed(4)} SOL`} — needs
-                ~0.01 once for vault rent
-              </p>
-              <label>
-                display name{" "}
-                <input
-                  value={name}
-                  maxLength={12}
-                  onChange={(e) => setName(e.target.value.replace(/[^\w-]/g, ""))}
-                />
-              </label>
-              <div className="row">
-                <button onClick={airdrop}>request devnet airdrop</button>
-                <button
-                  className="primary"
-                  disabled={balance !== null && balance < 0.01}
-                  onClick={enter}
-                >
-                  {joinTarget ? "enter your partner's vault" : "open a new vault"}
-                </button>
-              </div>
-            </>
-          )}
-          {error && <p className="error">{error}</p>}
-          {!joinTarget && board.length > 0 && (
-            <div className="worlds">
-              <p>fastest escapes — read straight off the rollup, no server:</p>
-              {board.map((b, i) => (
-                <div key={b.addr} className="boardrow">
-                  <span className="rank">#{i + 1}</span>
-                  <span className="btime">{fmtTime(b.time)}</span>
-                  <code>{b.addr.slice(0, 8)}…</code>
+        <div className="title">
+          <div className="hero">
+            <div className="kicker">solsocket presents</div>
+            <h2 className="game-title">THE VAULT</h2>
+            <div className="hero-sub">
+              a two-player escape room on Solana — nine puzzles that are
+              impossible alone, every move a zero-fee onchain transaction on a
+              MagicBlock ephemeral rollup
+              {cluster === "local" ? " (local stack)" : ""}
+            </div>
+            <div className="hero-tags">
+              <span>⚡ ~50ms rollup writes</span>
+              <span>0 fees in-game</span>
+              <span>no game server</span>
+            </div>
+          </div>
+
+          <div className="levels-row">
+            {LEVELS.map((lv, i) => (
+              <div key={lv.name} className={`level-card lv${i}`}>
+                <div className="lv-num">LEVEL {i + 1}</div>
+                <div className="lv-name">{lv.name}</div>
+                <div className="lv-puzzles">
+                  {STEP_LABEL[lv.mech.door1]} · {STEP_LABEL[lv.mech.locks]} ·{" "}
+                  {STEP_LABEL[lv.mech.latch]}
                 </div>
-              ))}
+                <div className="lv-window">key window {(lv.keyWindowMs / 1000).toFixed(1)}s</div>
+              </div>
+            ))}
+          </div>
+
+          {watchMode ? (
+            <div className="join-card">
+              <p className="watch-blurb">
+                <b>spectator mode</b> — you're about to watch a live vault read
+                straight off the rollup. No transaction, no fees, your wallet
+                never needs funding.
+              </p>
+              <button className="primary cta" onClick={enter}>
+                ▶ watch this vault live
+              </button>
+            </div>
+          ) : (
+            <div className="join-card">
+              <div className="join-row">
+                <label className="name-field">
+                  call sign
+                  <input
+                    value={name}
+                    maxLength={12}
+                    onChange={(e) => setName(e.target.value.replace(/[^\w-]/g, ""))}
+                  />
+                </label>
+                <div className="wallet-field">
+                  burner wallet
+                  <div
+                    className={`wallet-chip${balance !== null && balance >= 0.01 ? " ok" : ""}`}
+                    title="click to copy the full address"
+                    onClick={() =>
+                      navigator.clipboard.writeText(wallet.publicKey.toBase58())
+                    }
+                  >
+                    <span className="dot" />
+                    <code>
+                      {wallet.publicKey.toBase58().slice(0, 4)}…
+                      {wallet.publicKey.toBase58().slice(-4)}
+                    </code>
+                    <span className="chip-bal">
+                      {balance === null ? "…" : `${balance.toFixed(3)} SOL`}
+                    </span>
+                  </div>
+                </div>
+                {!(balance !== null && balance >= 0.01) && (
+                  <button className="fund-btn" onClick={airdrop}>
+                    get devnet SOL
+                  </button>
+                )}
+              </div>
+              <button
+                className="primary cta"
+                disabled={balance !== null && balance < 0.01}
+                onClick={enter}
+              >
+                {joinTarget ? "▶ enter your partner's vault" : "▶ open a new vault"}
+              </button>
+              <div className="join-note">
+                {balance !== null && balance >= 0.01
+                  ? "rent covered — grab a partner and go"
+                  : "needs ~0.01 devnet SOL once for vault rent — every move after that is free"}
+              </div>
             </div>
           )}
-          {!joinTarget && live.length > 0 && (
-            <div className="worlds">
-              <p>…or watch a vault that's live right now:</p>
-              {live.map((w) => (
-                <button
-                  key={w.address.toBase58()}
-                  onClick={() => {
-                    const suffix =
-                      (cluster === "local" ? "&cluster=local" : "") +
-                      (region ? `&region=${region}` : "");
-                    location.href = `${location.pathname}?room=${w.address.toBase58()}${suffix}&watch=1`;
-                  }}
-                >
-                  {w.address.toBase58().slice(0, 8)}… · {w.players}/2 inside · watch ▸
-                </button>
-              ))}
+          {error && <p className="error">{error}</p>}
+
+          {!joinTarget && (board.length > 0 || live.length > 0) && (
+            <div className="lobby">
+              {board.length > 0 && (
+                <div className="lobby-col">
+                  <p className="lobby-head">
+                    🏆 fastest escapes <span>· read off the rollup, no server</span>
+                  </p>
+                  {board.map((b, i) => (
+                    <div key={b.addr} className="boardrow">
+                      <span className={`rank r${i}`}>{i + 1}</span>
+                      <span className="btime">{fmtTime(b.time)}</span>
+                      <code>{b.addr.slice(0, 8)}…</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {live.length > 0 && (
+                <div className="lobby-col">
+                  <p className="lobby-head">
+                    <span className="live-dot" /> live right now
+                  </p>
+                  {live.map((w) => (
+                    <button
+                      key={w.address.toBase58()}
+                      className="live-row"
+                      onClick={() => {
+                        const suffix =
+                          (cluster === "local" ? "&cluster=local" : "") +
+                          (region ? `&region=${region}` : "");
+                        location.href = `${location.pathname}?room=${w.address.toBase58()}${suffix}&watch=1`;
+                      }}
+                    >
+                      <code>{w.address.toBase58().slice(0, 8)}…</code>
+                      <span>{w.players}/2 inside</span>
+                      <span className="watch-cta">watch ▸</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
