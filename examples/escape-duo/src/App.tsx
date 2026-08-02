@@ -125,6 +125,7 @@ export default function App() {
   const [board, setBoard] = useState<{ addr: string; time: number }[]>([]);
   const [live, setLive] = useState<RoomListing[]>([]);
   const [mute, setMute] = useState(isMuted());
+  const [copied, setCopied] = useState(false);
 
   const roomRef = useRef<Vault | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -927,17 +928,23 @@ export default function App() {
                   <div
                     className={`wallet-chip${balance !== null && balance >= 0.01 ? " ok" : ""}`}
                     title="click to copy the full address"
-                    onClick={() =>
-                      navigator.clipboard.writeText(wallet.publicKey.toBase58())
-                    }
+                    onClick={() => {
+                      void navigator.clipboard.writeText(wallet.publicKey.toBase58());
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1_500);
+                    }}
                   >
                     <span className="dot" />
                     <code>
-                      {wallet.publicKey.toBase58().slice(0, 4)}…
-                      {wallet.publicKey.toBase58().slice(-4)}
+                      {copied
+                        ? "address copied ✓"
+                        : `${wallet.publicKey.toBase58().slice(0, 4)}…${wallet.publicKey.toBase58().slice(-4)}`}
                     </code>
                     <span className="chip-bal">
                       {balance === null ? "…" : `${balance.toFixed(3)} SOL`}
+                    </span>
+                    <span className={`copy-ic${copied ? " done" : ""}`}>
+                      {copied ? "✓" : "⧉ copy"}
                     </span>
                   </div>
                 </div>
