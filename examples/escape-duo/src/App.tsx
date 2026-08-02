@@ -394,13 +394,22 @@ export default function App() {
         buf.current = "";
         return;
       }
-      if (/^[0-9]$/.test(e.key)) {
+      // Digits by PHYSICAL key code first (Digit1/Numpad1) — e.key lies on
+      // some layouts/IME states, exactly like the old d-key bug.
+      const digit = /^Digit[0-9]$/.test(e.code)
+        ? e.code.slice(5)
+        : /^Numpad[0-9]$/.test(e.code)
+          ? e.code.slice(6)
+          : /^[0-9]$/.test(e.key)
+            ? e.key
+            : null;
+      if (digit !== null) {
         if (lv().mech.locks !== "codes") return;
         const pad = myPad();
         const theirs = myRole() === 0 ? lv().pos.k : lv().pos.K;
         if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
           sfx.key();
-          enterDigit(e.key);
+          enterDigit(digit);
         } else if (near(me.x, me.y, theirs.x, theirs.y, 1.6)) {
           chats.current.set(selfKey, {
             text: "partner's keypad — yours has the yellow border",
