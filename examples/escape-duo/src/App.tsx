@@ -105,6 +105,79 @@ const fmtTime = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
+/** Title-screen attract mode: the real game world, rendered live, cycling
+ *  through all three chambers — coolant shimmering, pulse walls beating. */
+function VaultPreview() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const ctx = ref.current!.getContext("2d")!;
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    let raf = 0;
+    let lvIdx = 0;
+    let switchAt = Date.now() + 4_000;
+    const loop = (t: number) => {
+      if (Date.now() > switchAt) {
+        lvIdx = (lvIdx + 1) % LEVELS.length;
+        switchAt = Date.now() + 4_000;
+      }
+      const L = LEVELS[lvIdx];
+      drawVault(ctx, L, {
+        t,
+        doors: 0,
+        frozen: false,
+        role: -1,
+        seeCode: [],
+        buf: "",
+        meTile: "",
+        partnerTile: "",
+        keyA: 0,
+        keyB: 0,
+        keyWindowMs: L.keyWindowMs,
+        pulseOn: pulseOpen(1, Date.now()),
+        valveHalf: 0,
+        valveAt: 0,
+        carryMe: false,
+        carryPartner: false,
+        chargeFrac: 0,
+        ventOff: false,
+        heldI: false,
+        heldJ: false,
+      });
+      drawPlayer(
+        ctx,
+        "demo-you",
+        { x: L.spawn.x, y: L.spawn.y, facing: 0, name: "you" },
+        { self: true, t },
+      );
+      drawPlayer(
+        ctx,
+        "demo-p2",
+        { x: L.spawn.x + 34, y: L.spawn.y + 6, facing: 1, name: "partner" },
+        { t },
+      );
+      ctx.font = "bold 9px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(230,188,102,0.9)";
+      ctx.fillText(`CHAMBER 0${L.index + 1} · ${L.name.toUpperCase()}`, 10, HEIGHT - 10);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div className="preview-wrap">
+      <span className="preview-chip">LIVE WORLD PREVIEW</span>
+      <canvas
+        ref={ref}
+        width={WIDTH * 2}
+        height={HEIGHT * 2}
+        className="preview"
+        aria-label="Live preview of the vault chambers"
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const [phase, setPhase] = useState<"funding" | "connecting" | "live" | "error">(
     "funding",
@@ -126,6 +199,24 @@ export default function App() {
   const [live, setLive] = useState<RoomListing[]>([]);
   const [mute, setMute] = useState(isMuted());
   const [copied, setCopied] = useState(false);
+  const [levelCard, setLevelCard] = useState<{
+    num: number;
+    name: string;
+    win: number;
+    until: number;
+  } | null>(null);
+  const [keypadOn, setKeypadOn] = useState(false);
+  const [padBuf, setPadBuf] = useState("");
+  const [copiedLink, setCopiedLink] = useState<"invite" | "watch" | null>(null);
+  const [, setUiTick] = useState(0); // repaint driver for ref-backed feed
+
+  const copyLink = (kind: "invite" | "watch") => {
+    void navigator.clipboard.writeText(
+      kind === "watch" ? `${location.href}&watch=1` : location.href,
+    );
+    setCopiedLink(kind);
+    setTimeout(() => setCopiedLink(null), 1_500);
+  };
 
   const roomRef = useRef<Vault | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -142,6 +233,20 @@ export default function App() {
   const valveRef = useRef({ half: 0, at: 0 }); // valves mech: pair 1 latched?
   const chargeRef = useRef({ start: 0, lastBoth: 0 }); // charge mech: hold timer
   const sndPrev = useRef({ doors: 0, cleared: false, out: false, keyA: 0, keyB: 0 });
+  const feed = useRef<{ id: number; ico: string; text: string }[]>([]);
+  const feedId = useRef(0);
+  const presenceTx = useRef(0);
+  const mePos = useRef({ x: 0, y: 0 }); // mirrored out of the game loop for the HTML keypad
+  const enterDigitRef = useRef<((d: string) => void) | null>(null);
+  const shakeRef = useRef(0); // screen shake until-timestamp
+  const parts = useRef<
+    { x: number; y: number; vx: number; vy: number; life: number; color: string }[]
+  >([]);
+
+  /** The live tx feed beside the canvas — the rollup, visible. */
+  const pushFeed = (ico: string, text: string) => {
+    feed.current = [{ id: feedId.current++, ico, text }, ...feed.current].slice(0, 30);
+  };
 
   const selfKey = wallet.publicKey.toBase58();
   const roleRef = useRef(0);
@@ -204,15 +309,35 @@ export default function App() {
     const nowCleared = solved && !isFinal(v);
     setOut(nowOut);
     setCleared(nowCleared);
-    // sound triggers: fire once per state transition, whoever caused it
+    // sound + feed triggers: fire once per state transition, whoever caused it
     const p = sndPrev.current;
-    if (v.doors & DOOR1 && !(p.doors & DOOR1)) sfx.door();
-    if (v.doors & LOCK1 && !(p.doors & LOCK1)) sfx.door();
-    if (v.doors & LOCK2 && !(p.doors & LOCK2)) sfx.door();
-    if (v.doors & LATCH && !(p.doors & LATCH)) sfx.latch();
+    if (v.doors & DOOR1 && !(p.doors & DOOR1)) {
+      sfx.door();
+      pushFeed("🚪", "stage 1 solved — door 1 unlocked · zero-fee tx");
+    }
+    if (v.doors & LOCK1 && !(p.doors & LOCK1)) {
+      sfx.door();
+      pushFeed("🔓", "lock 1 released · zero-fee tx");
+    }
+    if (v.doors & LOCK2 && !(p.doors & LOCK2)) {
+      sfx.door();
+      pushFeed("🔓", "lock 2 released · zero-fee tx");
+    }
+    if (v.doors & LATCH && !(p.doors & LATCH)) {
+      sfx.latch();
+      pushFeed("⚙️", "stage 3 latched — door 3 open · zero-fee tx");
+    }
+    if (v.keyA && v.keyA !== p.keyA) pushFeed("🗝️", "key A turned · timestamp onchain");
+    if (v.keyB && v.keyB !== p.keyB) pushFeed("🗝️", "key B turned · timestamp onchain");
     if ((v.keyA && v.keyA !== p.keyA) || (v.keyB && v.keyB !== p.keyB)) sfx.turn();
-    if (nowCleared && !p.cleared) sfx.clear();
-    if (nowOut && !p.out) sfx.escape();
+    if (nowCleared && !p.cleared) {
+      sfx.clear();
+      pushFeed("✅", `level ${v.level + 1} cleared`);
+    }
+    if (nowOut && !p.out) {
+      sfx.escape();
+      pushFeed("🏆", "ESCAPED — the whole run is verifiable onchain");
+    }
     sndPrev.current = {
       doors: v.doors,
       cleared: nowCleared,
@@ -301,21 +426,40 @@ export default function App() {
       }
       room.onStateChange(({ state }) => applyState(state));
       const first = await room.getState();
-      if (first) applyState(first.state);
+      if (first) {
+        // prime the sound/feed differ so rejoining doesn't replay history
+        sndPrev.current = {
+          doors: first.state.doors,
+          cleared: solvedKeys(first.state) && !isFinal(first.state),
+          out: solvedKeys(first.state) && isFinal(first.state),
+          keyA: first.state.keyA,
+          keyB: first.state.keyB,
+        };
+        applyState(first.state);
+      }
       room.onMessage("chat", ({ player, data }) => {
         if (player.toBase58() !== selfKey) sfx.chat();
         chats.current.set(player.toBase58(), {
           text: (data as ChatMsg).text,
           until: Date.now() + 5_000,
         });
+        pushFeed("💬", `${player.toBase58().slice(0, 6)}…: ${(data as ChatMsg).text.slice(0, 40)}`);
       });
       room.onPresence(({ player }) => {
+        presenceTx.current += 1;
         if (player.toBase58() === selfKey && sentAt.current) {
           setEcho(Date.now() - sentAt.current);
         }
       });
       smoothPresence(room, (players) => {
         remotes.current = players;
+      });
+      const cur = levelOf(vault.current);
+      setLevelCard({
+        num: vault.current.level + 1,
+        name: cur.name,
+        win: cur.keyWindowMs,
+        until: Date.now() + 2_400,
       });
       setPhase("live");
     } catch (e) {
@@ -329,6 +473,8 @@ export default function App() {
     if (phase !== "live") return;
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
+    // 2x backing store: crisp at any display scale (idempotent transform)
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
     const keys = new Set<string>();
     let curLevel = vault.current.level;
     const me = { x: levelOf(vault.current).spawn.x, y: levelOf(vault.current).spawn.y, facing: 0 };
@@ -338,6 +484,26 @@ export default function App() {
     let lastTile = "";
     let raf = 0;
     let last = performance.now();
+    // fx trackers: fire particles once per observed transition
+    let fxDoors = vault.current.doors;
+    let fxKeyA = vault.current.keyA;
+    let fxKeyB = vault.current.keyB;
+    let fxFrozen = false;
+
+    const spawnBurst = (x: number, y: number, color: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 40 + Math.random() * 90;
+        parts.current.push({
+          x,
+          y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp - 30,
+          life: 0.6 + Math.random() * 0.3,
+          color,
+        });
+      }
+    };
 
     const typing = () => document.activeElement === chatInputRef.current;
     const room = () => roomRef.current;
@@ -374,9 +540,21 @@ export default function App() {
         writeState({ doors: vault.current.doors | (myRole() === 0 ? LOCK2 : LOCK1) });
       } else {
         sfx.wrong();
+        shakeRef.current = Date.now() + 150;
         chats.current.set(selfKey, { text: "✗ wrong code", until: Date.now() + 1_500 });
       }
       buf.current = "";
+    };
+    // The HTML keypad clicks route through the same entry path — with the
+    // same proximity rules (the panel can linger up to one UI tick).
+    enterDigitRef.current = (d: string) => {
+      const L = lv();
+      if (L.mech.locks !== "codes") return;
+      const pad = myPad();
+      if (!near(me.x, me.y, pad.x, pad.y, 2.6)) return;
+      sfx.key();
+      enterDigit(d);
+      setPadBuf(buf.current);
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -407,10 +585,11 @@ export default function App() {
         if (lv().mech.locks !== "codes") return;
         const pad = myPad();
         const theirs = myRole() === 0 ? lv().pos.k : lv().pos.K;
-        if (near(me.x, me.y, pad.x, pad.y, 1.6)) {
+        if (near(me.x, me.y, pad.x, pad.y, 2.2)) {
           sfx.key();
           enterDigit(digit);
-        } else if (near(me.x, me.y, theirs.x, theirs.y, 1.6)) {
+          setPadBuf(buf.current);
+        } else if (near(me.x, me.y, theirs.x, theirs.y, 2.2)) {
           chats.current.set(selfKey, {
             text: "partner's keypad — yours has the yellow border",
             until: Date.now() + 2_000,
@@ -480,6 +659,20 @@ export default function App() {
       setTxCount(sent.current);
       const others = [...remotes.current.keys()].filter((k) => k !== selfKey).length;
       setOnline(watchMode ? others : 1 + others);
+      // HTML keypad: visible whenever you're at YOUR pad with a lock to open
+      const Lc = levelOf(vault.current);
+      const myBit = myRole() === 0 ? LOCK2 : LOCK1;
+      const padPos = myRole() === 0 ? Lc.pos.K : Lc.pos.k;
+      setKeypadOn(
+        !watchMode &&
+          Lc.mech.locks === "codes" &&
+          !(vault.current.doors & myBit) &&
+          !solvedKeys(vault.current) &&
+          padPos !== undefined &&
+          near(mePos.current.x, mePos.current.y, padPos.x, padPos.y, 2.2),
+      );
+      setPadBuf(buf.current);
+      setUiTick((t) => t + 1);
       const v = vault.current;
       if (v.run > 0)
         setClock(
@@ -513,6 +706,11 @@ export default function App() {
         carryRef.current = false;
         valveRef.current = { half: 0, at: 0 };
         chargeRef.current = { start: 0, lastBoth: 0 };
+        fxDoors = 0;
+        fxKeyA = 0;
+        fxKeyB = 0;
+        fxFrozen = false;
+        setLevelCard({ num: v.level + 1, name: L.name, win: L.keyWindowMs, until: Date.now() + 2_400 });
         broadcast(true);
       }
 
@@ -529,6 +727,8 @@ export default function App() {
       // your partner is freezing it from the vent plate — or it's purged).
       const ventSafe = (v.doors & LATCH) !== 0 || pTile === "V";
       if (!watchMode && !solvedKeys(v) && deadlyTile(myTile, ventSafe)) {
+        spawnBurst(me.x, me.y, "#f87171", 14);
+        shakeRef.current = Date.now() + 250;
         me.x = L.spawn.x;
         me.y = L.spawn.y;
         myTile = tileUnder(L, me.x, me.y);
@@ -562,6 +762,16 @@ export default function App() {
           if (walkable(L, nx, me.y, v.doors, held, pulse)) me.x = nx;
           if (walkable(L, me.x, ny, v.doors, held, pulse)) me.y = ny;
           me.facing = vy < 0 ? 3 : vx < 0 ? 1 : vx > 0 ? 2 : 0;
+          // footstep dust
+          if (Date.now() - lastMoved > 140)
+            parts.current.push({
+              x: me.x + (Math.random() - 0.5) * 8,
+              y: me.y + 9,
+              vx: (Math.random() - 0.5) * 12,
+              vy: -8 - Math.random() * 10,
+              life: 0.35,
+              color: "rgba(154,147,184,0.5)",
+            });
           lastMoved = Date.now();
         }
         if (Date.now() - lastMoved < 200) broadcast();
@@ -627,8 +837,42 @@ export default function App() {
       }
 
       // A half-typed code shouldn't linger: walking away clears the keypad.
-      if (mech.locks === "codes" && buf.current && !near(me.x, me.y, myPad().x, myPad().y, 1.6))
+      if (mech.locks === "codes" && buf.current && !near(me.x, me.y, myPad().x, myPad().y, 2.6))
         buf.current = "";
+      mePos.current.x = me.x;
+      mePos.current.y = me.y;
+
+      // fx: sparks on doors opening, key turns, level clears
+      if (v.doors !== fxDoors) {
+        const gained = v.doors & ~fxDoors;
+        fxDoors = v.doors;
+        if (gained) {
+          if (!watchMode) spawnBurst(me.x, me.y, "#e6bc66", 10);
+          const p2 = partner();
+          if (p2) spawnBurst(p2.data.x, p2.data.y, "#e6bc66", 10);
+        }
+      }
+      if (v.keyA && v.keyA !== fxKeyA) {
+        fxKeyA = v.keyA;
+        spawnBurst(L.pos.A.x, L.pos.A.y, "#facc15", 12);
+      }
+      if (v.keyB && v.keyB !== fxKeyB) {
+        fxKeyB = v.keyB;
+        spawnBurst(L.pos.B.x, L.pos.B.y, "#facc15", 12);
+      }
+      if (frozen && !fxFrozen) {
+        fxFrozen = true;
+        for (const c of ["#4ade80", "#e6bc66", "#facc15"])
+          spawnBurst(WIDTH / 2, HEIGHT / 2, c, 16);
+      }
+
+      // screen shake: hazards and wrong codes rattle the vault
+      const shakeLeft = shakeRef.current - Date.now();
+      ctx.save();
+      if (shakeLeft > 0) {
+        const m = 4 * (shakeLeft / 250);
+        ctx.translate((Math.random() - 0.5) * 2 * m, (Math.random() - 0.5) * 2 * m);
+      }
 
       const codes = codesFor(room()!.address, v.level);
       drawVault(ctx, L, {
@@ -721,6 +965,7 @@ export default function App() {
         drawPlayer(ctx, key, pp.data, {
           chat: chats.current.get(key),
           carry: !!pp.data.carry,
+          t: now,
         });
       }
       if (!watchMode)
@@ -728,10 +973,29 @@ export default function App() {
           ctx,
           selfKey,
           { x: me.x, y: me.y, facing: me.facing, name },
-          { self: true, chat: chats.current.get(selfKey), carry: carryRef.current },
+          { self: true, chat: chats.current.get(selfKey), carry: carryRef.current, t: now },
         );
 
-      // hazard hit: red flash fading out
+      // particles
+      const ps = parts.current;
+      for (let i = ps.length - 1; i >= 0; i--) {
+        const q = ps[i];
+        q.life -= dt;
+        if (q.life <= 0) {
+          ps.splice(i, 1);
+          continue;
+        }
+        q.x += q.vx * dt;
+        q.y += q.vy * dt;
+        q.vy += 160 * dt;
+        ctx.globalAlpha = Math.max(0, Math.min(1, q.life * 1.6));
+        ctx.fillStyle = q.color;
+        ctx.fillRect(q.x - 1.5, q.y - 1.5, 3, 3);
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      // hazard hit: red flash fading out (drawn unshaken, over everything)
       if (flash.current && flash.current.until > Date.now()) {
         const a = ((flash.current.until - Date.now()) / 350) * 0.35;
         ctx.fillStyle = `rgba(248,113,113,${a.toFixed(3)})`;
@@ -839,23 +1103,16 @@ export default function App() {
           <div className="status">
             <span className="dot live" /> vault{" "}
             <code>{room.address.toBase58().slice(0, 8)}…</code>
-            <button onClick={() => navigator.clipboard.writeText(location.href)}>
-              copy invite link
+            <button onClick={() => copyLink("invite")}>
+              {copiedLink === "invite" ? "copied ✓" : "copy invite link"}
             </button>
             <span>{watchMode ? `watching · ${online}/2 inside` : `${online}/2 inside`}</span>
             {!watchMode && (
-              <button
-                onClick={() => navigator.clipboard.writeText(`${location.href}&watch=1`)}
-              >
-                copy watch link
+              <button onClick={() => copyLink("watch")}>
+                {copiedLink === "watch" ? "copied ✓" : "copy watch link"}
               </button>
             )}
-            <span className="metric">
-              lvl {level + 1}/{LEVELS.length} · {lvName}
-            </span>
-            {clock && <span className="metric">⏱ {clock}</span>}
-            <span className="metric">{txCount} onchain writes</span>
-            {echo !== null && <span className="metric">{echo}ms echo</span>}
+            <span className="status-spacer" />
             <button onClick={() => setShowHint(true)}>how to play</button>
             <button
               onClick={() => {
@@ -918,7 +1175,7 @@ export default function App() {
                 never needs funding.
               </p>
               <button className="primary cta" onClick={enter}>
-                ▶ watch this vault live
+                ▶ WATCH THE HEIST LIVE
               </button>
             </div>
           ) : (
@@ -968,7 +1225,7 @@ export default function App() {
                 disabled={balance !== null && balance < 0.01}
                 onClick={enter}
               >
-                {joinTarget ? "▶ enter your partner's vault" : "▶ open a new vault"}
+                {joinTarget ? "▶ JOIN THE HEIST" : "▶ START A HEIST"}
               </button>
               <div className="join-note">
                 {balance !== null && balance >= 0.01
@@ -977,6 +1234,8 @@ export default function App() {
               </div>
             </div>
           )}
+          <VaultPreview />
+
           {error && <p className="error">{error}</p>}
 
           {!joinTarget && (board.length > 0 || live.length > 0) && (
@@ -1030,10 +1289,80 @@ export default function App() {
         </div>
       )}
 
-      {phase === "error" && <div className="panel error">{error}</div>}
+      {phase === "error" && (
+        <div className="panel">
+          <p className="error" style={{ margin: "0 0 8px" }}>
+            couldn't reach the vault — devnet may be busy.
+          </p>
+          <details style={{ marginBottom: 10 }}>
+            <summary style={{ cursor: "pointer", fontSize: 12 }}>details</summary>
+            <code>{error}</code>
+          </details>
+          <button className="primary" onClick={() => location.reload()}>
+            try again
+          </button>
+        </div>
+      )}
 
-      <div className="stage" style={{ display: phase === "live" ? "block" : "none" }}>
-        <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
+      <div className="game-wrap" style={{ display: phase === "live" ? "grid" : "none" }}>
+        <div>
+        <div className="hud">
+          <span className="hud-level">
+            CHAMBER 0{level + 1} — {lvName.toUpperCase()}
+          </span>
+          <span className="hud-right">
+            <span className="hud-online">
+              {watchMode ? `watching · ${online}/2 in` : `${online}/2 in`}
+            </span>
+            {clock && <span className="hud-clock">{clock}</span>}
+          </span>
+        </div>
+        <div className="stage">
+        <canvas
+          ref={canvasRef}
+          width={WIDTH * 2}
+          height={HEIGHT * 2}
+          aria-label="The Vault — live game view"
+        />
+        {phase === "live" && watchMode && (
+          <>
+            <div className="scanlines" />
+            <span className="live-chip">
+              <b>●</b> LIVE FEED
+            </span>
+          </>
+        )}
+        {phase === "live" && levelCard && Date.now() < levelCard.until && (
+          <div className="lvlcard">
+            <span>CHAMBER 0{levelCard.num}</span>
+            <b>{levelCard.name.toUpperCase()}</b>
+            <i>key window {(levelCard.win / 1000).toFixed(1)}s</i>
+          </div>
+        )}
+        {phase === "live" && keypadOn && (
+          <div className="keypad">
+            <div className="keypad-buf">{padBuf.padEnd(4, "·").split("").join(" ")}</div>
+            <div className="keypad-grid">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "⌫"].map((k) => (
+                <button
+                  key={k}
+                  className="keypad-key"
+                  aria-label={k === "⌫" ? "delete last digit" : `digit ${k}`}
+                  onClick={() => {
+                    if (k === "⌫") {
+                      buf.current = buf.current.slice(0, -1);
+                      setPadBuf(buf.current);
+                    } else {
+                      enterDigitRef.current?.(k);
+                    }
+                  }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {phase === "live" && !watchMode && online < 2 && level === 0 && !(doors & DOOR1) && !out && (
           <div className="hint">
             <b>waiting for your partner</b>
@@ -1111,25 +1440,75 @@ export default function App() {
             </button>
           </div>
         )}
-        {objective && !out && !cleared && <div className="objective">{objective}</div>}
-        <div className="steps">
-          {steps.map(([label, done]) => (
-            <span key={label} className={done ? "step done" : "step"}>
-              {done ? "✓" : "○"} {label}
-            </span>
-          ))}
         </div>
         {!watchMode && (
           <form className="chatbar" onSubmit={sendChat}>
             <input
               ref={chatInputRef}
               value={chatDraft}
+              maxLength={140}
               placeholder="Enter to chat — relay those codes · WASD move · E use"
               onChange={(e) => setChatDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && chatInputRef.current?.blur()}
             />
           </form>
         )}
+        </div>
+        <aside className="side">
+          {objective && !out && !cleared && (
+            <div className="objective" key={objective}>
+              {objective}
+            </div>
+          )}
+          <div className="steps">
+            {steps.map(([label, done]) => (
+              <span key={label} className={done ? "step done" : "step"}>
+                {done ? "✓" : "○"} {label}
+              </span>
+            ))}
+          </div>
+          <div className="feed">
+            <div className="feed-head">
+              <span className="dot live" /> solana tx feed
+            </div>
+            <div className="feed-stream">
+              presence · {presenceTx.current} txs
+              {echo !== null ? ` · ${echo}ms echo` : ""}
+            </div>
+            <div className="feed-stream">{txCount} zero-fee txs sent</div>
+            {feed.current.length === 0 ? (
+              <div className="feed-empty">
+                every chat line and puzzle write lands here the moment it hits
+                the rollup — movement streams above
+              </div>
+            ) : (
+              feed.current.slice(0, 7).map((f) => (
+                <div key={f.id} className="feed-item">
+                  <span className="feed-ico">{f.ico}</span>
+                  <span>{f.text}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </aside>
+      </div>
+
+      <div className="footer">
+        <span>built on solsocket — Socket.io for Solana</span>
+        <span className="sep">·</span>
+        <a href="https://github.com/Pratikkale26/solsocket" target="_blank" rel="noreferrer">
+          GitHub
+        </a>
+        <span className="sep">·</span>
+        <a
+          href="https://explorer.solana.com/address/CrLS1Ry58q59AgmqbNVrqbfs2bWGJtjk12PezXh4LeYh?cluster=devnet"
+          target="_blank"
+          rel="noreferrer"
+        >
+          program
+        </a>
+        <span className="sep">·</span>
+        <span>zero-fee on a MagicBlock ER</span>
       </div>
     </div>
   );
