@@ -32,7 +32,7 @@ import {
   tileUnder,
   walkable,
 } from "./vault";
-import { isMuted, setMuted, sfx } from "./sound";
+import { isMuted, setMuted, sfx, startAmbient, stopAmbient } from "./sound";
 import { loadBurnerWallet, requestAirdrop } from "./wallet";
 
 const wallet = loadBurnerWallet();
@@ -92,6 +92,9 @@ async function goLive(): Promise<Vault> {
   return room;
 }
 /* ────────────────────────────────────────────────────────────────────────── */
+
+const linkSuffix =
+  (cluster === "local" ? "&cluster=local" : "") + (region ? `&region=${region}` : "");
 
 function loadName(): string {
   return (
@@ -209,6 +212,8 @@ export default function App() {
   const [padBuf, setPadBuf] = useState("");
   const [copiedLink, setCopiedLink] = useState<"invite" | "watch" | null>(null);
   const [, setUiTick] = useState(0); // repaint driver for ref-backed feed
+  const [rematchRoom, setRematchRoom] = useState<string | null>(null);
+  const autoDropped = useRef(false);
 
   const copyLink = (kind: "invite" | "watch") => {
     void navigator.clipboard.writeText(
@@ -264,6 +269,26 @@ export default function App() {
     setBalance(lamports / LAMPORTS_PER_SOL);
     return lamports;
   }, []);
+
+  // Funding screen: poll so the button lights up the moment SOL lands —
+  // and quietly try the faucet once for brand-new visitors.
+  useEffect(() => {
+    if (phase !== "funding" || watchMode) return;
+    const iv = setInterval(async () => {
+      const lam = await refreshBalance().catch(() => null);
+      if (!autoDropped.current && lam === 0) {
+        autoDropped.current = true;
+        try {
+          const sock = SolSocket.connect({ wallet, cluster });
+          await requestAirdrop(sock.base, wallet);
+          await refreshBalance();
+        } catch {
+          /* faucet rate-limited — the manual button is still there */
+        }
+      }
+    }, 3_000);
+    return () => clearInterval(iv);
+  }, [phase, refreshBalance]);
 
   useEffect(() => {
     void refreshBalance();
@@ -445,6 +470,9 @@ export default function App() {
         });
         pushFeed("💬", `${player.toBase58().slice(0, 6)}…: ${(data as ChatMsg).text.slice(0, 40)}`);
       });
+      room.onMessage("rematch", ({ player, data }) => {
+        if (player.toBase58() !== selfKey) setRematchRoom((data as ChatMsg).text);
+      });
       room.onPresence(({ player }) => {
         presenceTx.current += 1;
         if (player.toBase58() === selfKey && sentAt.current) {
@@ -475,6 +503,7 @@ export default function App() {
     const ctx = canvas.getContext("2d")!;
     // 2x backing store: crisp at any display scale (idempotent transform)
     ctx.setTransform(2, 0, 0, 2, 0, 0);
+    startAmbient(); // low vault hum for the whole run
     const keys = new Set<string>();
     let curLevel = vault.current.level;
     const me = { x: levelOf(vault.current).spawn.x, y: levelOf(vault.current).spawn.y, facing: 0 };
@@ -688,7 +717,7 @@ export default function App() {
         Date.now() - myKeyAt.current < levelOf(vault.current).keyWindowMs &&
         !solvedKeys(vault.current)
       )
-        sfx.tick();
+        sfx.heart();
     }, 300);
 
     const frame = (now: number) => {
@@ -1007,6 +1036,7 @@ export default function App() {
     raf = requestAnimationFrame(frame);
 
     return () => {
+      stopAmbient();
       cancelAnimationFrame(raf);
       clearInterval(counters);
       window.removeEventListener("keydown", onKeyDown);
@@ -1116,8 +1146,10 @@ export default function App() {
             <button onClick={() => setShowHint(true)}>how to play</button>
             <button
               onClick={() => {
-                setMuted(!mute);
-                setMute(!mute);
+                const next = !mute;
+                setMuted(next);
+                setMute(next);
+                if (!next && phase === "live") startAmbient();
               }}
             >
               {mute ? "🔇" : "🔊"}
@@ -1428,8 +1460,44 @@ export default function App() {
                 </>
               )}
             </div>
+            {!watchMode && rematchRoom && (
+              <button
+                className="primary"
+                onClick={() => {
+                  location.href = `${location.pathname}?room=${rematchRoom}${linkSuffix}`;
+                }}
+              >
+                join the rematch ▸
+              </button>
+            )}
+            {!watchMode && !rematchRoom && (
+              <button
+                className="primary"
+                onClick={async () => {
+                  try {
+                    const sock2 = SolSocket.connect({ wallet, cluster, region });
+                    const nr = await sock2.createRoom<VaultState, Player, ChatMsg>({
+                      codec: vaultCodec,
+                      presenceCodec: playerCodec,
+                      maxPlayers: 2,
+                      initialState: FRESH_VAULT,
+                    });
+                    const addr = nr.address.toBase58();
+                    // I created it → I am role 0 in the new vault.
+                    localStorage.setItem(`solsocket-escape:role:${addr}`, "0");
+                    void roomRef.current?.emit("rematch", { text: addr });
+                    setTimeout(() => {
+                      location.href = `${location.pathname}?room=${addr}${linkSuffix}`;
+                    }, 900);
+                  } catch {
+                    pushFeed("⚠️", "rematch failed — open a new vault instead");
+                  }
+                }}
+              >
+                rematch ▸ same partner, fresh vault
+              </button>
+            )}
             <button
-              className="primary"
               onClick={() => {
                 location.href =
                   location.pathname +
