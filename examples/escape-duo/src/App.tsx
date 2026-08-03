@@ -213,6 +213,7 @@ export default function App() {
   const [copiedLink, setCopiedLink] = useState<"invite" | "watch" | null>(null);
   const [, setUiTick] = useState(0); // repaint driver for ref-backed feed
   const [rematchRoom, setRematchRoom] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false); // vault-door transition
   const autoDropped = useRef(false);
 
   const copyLink = (kind: "invite" | "watch") => {
@@ -433,6 +434,13 @@ export default function App() {
     buf.current = "";
     myKeyAt.current = 0;
     writeState({ level: v.level + 1, doors: 0, keyA: 0, keyB: 0, start: 0, run: v.run });
+  };
+
+  /** Spin the handle, swing the door, then actually enter. */
+  const launch = () => {
+    if (opening) return;
+    setOpening(true);
+    setTimeout(() => void enter(), 750);
   };
 
   const enter = async () => {
@@ -1168,27 +1176,49 @@ export default function App() {
       </header>
 
       {phase === "funding" && (
-        <div className="title">
+        <div className={`title${opening ? " opening" : ""}`}>
           <div className="hero">
-            <div className="kicker">solsocket presents</div>
-            <h2 className="game-title">THE VAULT</h2>
-            <div className="hero-sub">
-              a two-player escape room on Solana — nine puzzles that are
-              impossible alone, every move a zero-fee onchain transaction on a
-              MagicBlock ephemeral rollup
-              {cluster === "local" ? " (local stack)" : ""}
-            </div>
-            <div className="hero-tags">
-              <span>⚡ ~50ms rollup writes</span>
-              <span>0 fees in-game</span>
-              <span>no game server</span>
+            <div className="hero-split">
+              <div className="hero-copy">
+                <div className="kicker">solsocket presents</div>
+                <h2 className="game-title">
+                  The<br />Vault
+                </h2>
+                <div className="hero-sub">
+                  A two-player heist on Solana. Nine puzzles that are impossible
+                  alone — and every move is a zero-fee onchain transaction on a
+                  MagicBlock ephemeral rollup
+                  {cluster === "local" ? " (local stack)" : ""}.
+                </div>
+                <div className="hero-tags">
+                  <span>~50ms rollup writes</span>
+                  <span>zero fees in-game</span>
+                  <span>no game server</span>
+                </div>
+              </div>
+              <div className="hero-door" aria-hidden="true">
+                <div className="vault-door">
+                  <div className="vd-bolts" />
+                  <div className="vd-ring" />
+                  <div className="vd-handle">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="vd-hub" />
+                </div>
+                <div className="vd-shadow" />
+              </div>
             </div>
           </div>
 
           <div className="levels-row">
             {LEVELS.map((lv, i) => (
               <div key={lv.name} className={`level-card lv${i}`}>
-                <div className="lv-num">LEVEL {i + 1}</div>
+                <div className="lv-top">
+                  <span className="lv-num">Chamber {"I II III".split(" ")[i]}</span>
+                  <span className="lv-ico">{"①②③"[i]}</span>
+                </div>
                 <div className="lv-name">{lv.name}</div>
                 <div className="lv-puzzles">
                   {STEP_LABEL[lv.mech.door1]} · {STEP_LABEL[lv.mech.locks]} ·{" "}
@@ -1206,8 +1236,8 @@ export default function App() {
                 straight off the rollup. No transaction, no fees, your wallet
                 never needs funding.
               </p>
-              <button className="primary cta" onClick={enter}>
-                ▶ WATCH THE HEIST LIVE
+              <button className="primary cta" onClick={launch}>
+                {opening ? "opening the vault…" : "Watch the heist live"}
               </button>
             </div>
           ) : (
@@ -1255,9 +1285,13 @@ export default function App() {
               <button
                 className="primary cta"
                 disabled={balance !== null && balance < 0.01}
-                onClick={enter}
+                onClick={launch}
               >
-                {joinTarget ? "▶ JOIN THE HEIST" : "▶ START A HEIST"}
+                {opening
+                  ? "opening the vault…"
+                  : joinTarget
+                    ? "Join the heist"
+                    : "Start the heist"}
               </button>
               <div className="join-note">
                 {balance !== null && balance >= 0.01
