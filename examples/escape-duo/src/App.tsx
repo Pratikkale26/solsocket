@@ -22,8 +22,10 @@ import {
   WIDTH,
   codesFor,
   deadlyTile,
+  drawAmbient,
   drawPlayer,
   drawVault,
+  sceneLights,
   isFinal,
   levelOf,
   near,
@@ -158,9 +160,14 @@ function VaultPreview() {
         { x: L.spawn.x + 34, y: L.spawn.y + 6, facing: 1, name: "partner" },
         { t },
       );
-      ctx.font = "bold 9px ui-monospace, monospace";
+      drawAmbient(ctx, [
+        { x: L.spawn.x, y: L.spawn.y, r: 140 },
+        { x: L.spawn.x + 34, y: L.spawn.y + 6, r: 110 },
+        ...sceneLights(L, 0),
+      ]);
+      ctx.font = "600 9px 'IBM Plex Mono', monospace";
       ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(230,188,102,0.9)";
+      ctx.fillStyle = "rgba(212, 175, 90, 0.9)";
       ctx.fillText(`CHAMBER 0${L.index + 1} · ${L.name.toUpperCase()}`, 10, HEIGHT - 10);
       raf = requestAnimationFrame(loop);
     };
@@ -1030,6 +1037,17 @@ export default function App() {
         ctx.fillRect(q.x - 1.5, q.y - 1.5, 3, 3);
       }
       ctx.globalAlpha = 1;
+
+      // ambient light: the vault is dark — players carry the light, the
+      // active puzzles and the exit glow through it
+      const lights: { x: number; y: number; r: number }[] = [];
+      if (!watchMode) lights.push({ x: me.x, y: me.y, r: 132 });
+      for (const [key, pp] of remotes.current) {
+        if (key === selfKey) continue;
+        lights.push({ x: pp.data.x, y: pp.data.y, r: 120 });
+      }
+      lights.push(...sceneLights(L, v.doors));
+      drawAmbient(ctx, lights);
       ctx.restore();
 
       // hazard hit: red flash fading out (drawn unshaken, over everything)
@@ -1177,56 +1195,22 @@ export default function App() {
 
       {phase === "funding" && (
         <div className={`title${opening ? " opening" : ""}`}>
-          <div className="hero">
-            <div className="hero-split">
-              <div className="hero-copy">
-                <div className="kicker">solsocket presents</div>
-                <h2 className="game-title">
-                  The<br />Vault
-                </h2>
-                <div className="hero-sub">
-                  A two-player heist on Solana. Nine puzzles that are impossible
-                  alone — and every move is a zero-fee onchain transaction on a
-                  MagicBlock ephemeral rollup
-                  {cluster === "local" ? " (local stack)" : ""}.
-                </div>
-                <div className="hero-tags">
-                  <span>~50ms rollup writes</span>
-                  <span>zero fees in-game</span>
-                  <span>no game server</span>
-                </div>
+          <div className="menu-hero">
+            <VaultPreview />
+            <div className="menu-scan" aria-hidden="true" />
+            <div className="menu-plate">
+              <div className="kicker">solsocket presents</div>
+              <h2 className="game-title">The Vault</h2>
+              <div className="hero-sub">
+                Two players. Nine puzzles. Every move a zero-fee Solana
+                transaction at ~50ms.
               </div>
-              <div className="hero-door" aria-hidden="true">
-                <div className="vault-door">
-                  <div className="vd-bolts" />
-                  <div className="vd-ring" />
-                  <div className="vd-handle">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                  <div className="vd-hub" />
-                </div>
-                <div className="vd-shadow" />
+              <div className="hero-tags">
+                <span>~50ms rollup writes</span>
+                <span>zero fees in-game</span>
+                <span>watching is free</span>
               </div>
             </div>
-          </div>
-
-          <div className="levels-row">
-            {LEVELS.map((lv, i) => (
-              <div key={lv.name} className={`level-card lv${i}`}>
-                <div className="lv-top">
-                  <span className="lv-num">Chamber {"I II III".split(" ")[i]}</span>
-                  <span className="lv-ico">{"①②③"[i]}</span>
-                </div>
-                <div className="lv-name">{lv.name}</div>
-                <div className="lv-puzzles">
-                  {STEP_LABEL[lv.mech.door1]} · {STEP_LABEL[lv.mech.locks]} ·{" "}
-                  {STEP_LABEL[lv.mech.latch]}
-                </div>
-                <div className="lv-window">key window {(lv.keyWindowMs / 1000).toFixed(1)}s</div>
-              </div>
-            ))}
           </div>
 
           {watchMode ? (
@@ -1300,7 +1284,22 @@ export default function App() {
               </div>
             </div>
           )}
-          <VaultPreview />
+          <div className="levels-row">
+            {LEVELS.map((lv, i) => (
+              <div key={lv.name} className={`level-card lv${i}`}>
+                <div className="lv-top">
+                  <span className="lv-num">MISSION 0{i + 1}</span>
+                  <span className="lv-ico">{String(i + 1).padStart(2, "0")}</span>
+                </div>
+                <div className="lv-name">{lv.name}</div>
+                <div className="lv-puzzles">
+                  {STEP_LABEL[lv.mech.door1]} · {STEP_LABEL[lv.mech.locks]} ·{" "}
+                  {STEP_LABEL[lv.mech.latch]}
+                </div>
+                <div className="lv-window">key window {(lv.keyWindowMs / 1000).toFixed(1)}s</div>
+              </div>
+            ))}
+          </div>
 
           {error && <p className="error">{error}</p>}
 
